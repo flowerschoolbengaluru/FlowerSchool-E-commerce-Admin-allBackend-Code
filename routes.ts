@@ -946,9 +946,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Reset Password
   app.post("/api/auth/reset-password", async (req, res) => {
     try {
-      const { contact, otp, newPassword, contactType } = req.body;
+      const { contact, newPassword, contactType } = req.body;
 
-      if (!contact || !otp || !newPassword || !contactType) {
+      if (!contact ||  !newPassword || !contactType) {
         return res.status(400).json({ message: "All fields are required" });
       }
 
@@ -956,14 +956,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const lookupKey = contactType === "phone" ? contact.replace(/\s+/g, '') : contact;
       const storedOtp = otpStorage.get(lookupKey);
       console.log(`[RESET DEBUG] Looking up OTP with key: "${lookupKey}" (original: "${contact}")`);
-      if (!storedOtp || !storedOtp.verified) {
-        return res.status(400).json({ message: "OTP not verified" });
-      }
+    
 
-      if (storedOtp.expires < Date.now()) {
-        otpStorage.delete(lookupKey);
-        return res.status(400).json({ message: "OTP has expired" });
-      }
 
       // Find user
       let user;

@@ -863,21 +863,14 @@ export async function registerRoutes(app) {
     // Reset Password
     app.post("/api/auth/reset-password", async (req, res) => {
         try {
-            const { contact, otp, newPassword, contactType } = req.body;
-            if (!contact || !otp || !newPassword || !contactType) {
+            const { contact, newPassword, contactType } = req.body;
+            if (!contact || !newPassword || !contactType) {
                 return res.status(400).json({ message: "All fields are required" });
             }
             // Normalize phone number for OTP lookup
             const lookupKey = contactType === "phone" ? contact.replace(/\s+/g, '') : contact;
             const storedOtp = otpStorage.get(lookupKey);
             console.log(`[RESET DEBUG] Looking up OTP with key: "${lookupKey}" (original: "${contact}")`);
-            if (!storedOtp || !storedOtp.verified) {
-                return res.status(400).json({ message: "OTP not verified" });
-            }
-            if (storedOtp.expires < Date.now()) {
-                otpStorage.delete(lookupKey);
-                return res.status(400).json({ message: "OTP has expired" });
-            }
             // Find user
             let user;
             if (contactType === "email") {
@@ -4138,7 +4131,8 @@ export async function registerRoutes(app) {
     // Duplicate create handler removed — images and other fields are handled by the unified POST /api/admin/products above.
     app.get("/api/admin/orders", async (req, res) => {
         try {
-            const orders = await storage.getAllOrders();
+            const { date } = req.query;
+            const orders = await storage.getAllOrders(date);
             res.json(orders);
         }
         catch (error) {
@@ -4152,6 +4146,13 @@ export async function registerRoutes(app) {
             const { status } = req.body;
             console.log(`Updating order ${id} status to ${status}`);
             const order = await storage.updateOrderStatus(id, status);
+            // Send status update email to user
+            try {
+                await emailService.sendOrderStatusUpdateEmail(order);
+            }
+            catch (emailError) {
+                console.error('Failed to send order status update email:', emailError);
+            }
             res.json({
                 success: true,
                 message: "Order status updated successfully",
@@ -4762,25 +4763,16 @@ export async function registerRoutes(app) {
             }
             // Admin authorization
             const isAdmin = config.admin.emails.includes(user.email) || user.userType === "admin";
-            const { name, email, phone, role, specialization, experience_years, bio, profile_image, hourly_rate, availability, is_active } = req.body;
+            const { name, phone, role, specialization, experience_years, bio, profile_image, hourly_rate, availability, is_active } = req.body;
             // Validate required fields
-            if (!name || !email) {
+            if (!name) {
                 return res.status(400).json({
                     success: false,
-                    error: "Name and email are required"
-                });
-            }
-            // Validate email format - only allow .com addresses
-            const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
-            if (!emailRegex.test(email)) {
-                return res.status(400).json({
-                    success: false,
-                    error: "Invalid email format - only .com addresses are allowed"
+                    error: "Name is required"
                 });
             }
             const instructorData = {
                 name: name.trim(),
-                email: email.trim().toLowerCase(),
                 phone: phone?.trim() || null,
                 role: role?.trim() || null,
                 specialization: specialization?.trim() || null,
@@ -4800,14 +4792,6 @@ export async function registerRoutes(app) {
         }
         catch (error) {
             console.error("Error creating instructor:", error);
-            if (error instanceof Error) {
-                if (error.message.includes('Email already exists')) {
-                    return res.status(409).json({
-                        success: false,
-                        error: "Email already exists"
-                    });
-                }
-            }
             res.status(500).json({
                 success: false,
                 error: "Failed to create instructor",

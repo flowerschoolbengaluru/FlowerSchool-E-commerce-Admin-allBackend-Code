@@ -534,7 +534,6 @@ export class DatabaseStorage {
         SELECT 
           id,
           name,
-          email,
           phone,
           role,
           specialization,
@@ -625,7 +624,6 @@ export class DatabaseStorage {
         SELECT 
           id,
           name,
-          email,
           phone,
           role,
           specialization,
@@ -652,17 +650,16 @@ export class DatabaseStorage {
     }
     async createInstructor(instructorData) {
         try {
-            const { name, email, phone, role, specialization, experience_years, bio, profile_image, hourly_rate, availability, is_active } = instructorData;
+            const { name, phone, role, specialization, experience_years, bio, profile_image, hourly_rate, availability, is_active } = instructorData;
             const query = `
         INSERT INTO bouquetbar.instructors (
-          name, email, phone, role, specialization, experience_years, 
+          name, phone, role, specialization, experience_years, 
           bio, profile_image, hourly_rate, availability, is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
       `;
             const values = [
                 name,
-                email,
                 phone || null,
                 role || null,
                 specialization || null,
@@ -681,16 +678,13 @@ export class DatabaseStorage {
         }
         catch (error) {
             console.error('Error creating instructor:', error);
-            if (error instanceof Error && error.message.includes('duplicate key')) {
-                throw new Error('Email already exists');
-            }
             throw new Error(`Failed to create instructor: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
     async updateInstructor(id, updates) {
         try {
             const allowedFields = [
-                'name', 'email', 'phone', 'role', 'specialization', 'experience_years',
+                'name', 'phone', 'role', 'specialization', 'experience_years',
                 'bio', 'profile_image', 'hourly_rate', 'availability', 'is_active'
             ];
             const updateFields = [];
@@ -732,9 +726,6 @@ export class DatabaseStorage {
         }
         catch (error) {
             console.error('Error updating instructor:', error);
-            if (error instanceof Error && error.message.includes('duplicate key')) {
-                throw new Error('Email already exists');
-            }
             throw new Error(`Failed to update instructor: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -760,7 +751,7 @@ export class DatabaseStorage {
         try {
             const query = `
         SELECT 
-          id, name, email, phone, specialization, experience_years,
+          id, name, phone, specialization, experience_years,
           bio, profile_image, hourly_rate, availability, is_active
         FROM bouquetbar.instructors
         WHERE specialization ILIKE $1 AND is_active = true
@@ -780,7 +771,7 @@ export class DatabaseStorage {
         try {
             const query = `
         SELECT 
-          id, name, email, phone, specialization, experience_years,
+          id, name, phone, specialization, experience_years,
           bio, profile_image, hourly_rate, availability
         FROM bouquetbar.instructors
         WHERE is_active = true
@@ -1789,12 +1780,21 @@ ORDER BY B.createdat DESC; `;
         return result.rows[0];
     }
     // Order Methods
-    async getAllOrders() {
-        const query = `
+    async getAllOrders(date) {
+        let query = `
     SELECT *
-    FROM bouquetbar.orders;
+    FROM bouquetbar.orders
   `;
-        console.log('Executing query:', query);
+        if (date) {
+            query += `
+      WHERE createdat >= '${date} 00:00:00'
+      AND createdat <= '${date} 23:59:59'
+    `;
+        }
+        query += `
+    ORDER BY createdat DESC;
+  `;
+        console.log("Executing Query:", query);
         const result = await db.query(query);
         return result.rows;
     }

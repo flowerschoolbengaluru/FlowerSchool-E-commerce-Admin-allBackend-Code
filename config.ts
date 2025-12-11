@@ -12,8 +12,8 @@ export const config = {
   },
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID || "AC33481cb2b9a8c5cd0e7ebfa5e7ef41be",
-    authToken: process.env.TWILIO_AUTH_TOKEN || "03d1c6447ba02b010d89815819c5fe7e",
-    verifyServiceSid: process.env.TWILIO_VERIFY_SERVICE_SID || "VAb363f196c6b6bf4367dcac40bce2704b",
+    authToken: process.env.TWILIO_AUTH_TOKEN || "7ddb7af8955984a2f393dd09f74eec16",
+    verifyServiceSid: process.env.TWILIO_SERVICE_SID || "VAb363f196c6b6bf4367dcac40bce2704b",
     sms: {
       fromNumber: process.env.TWILIO_PHONE_NUMBER || "+18633431421",
       phoneNumber: process.env.TWILIO_PHONE_NUMBER || ""
