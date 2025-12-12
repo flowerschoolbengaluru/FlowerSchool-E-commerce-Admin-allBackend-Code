@@ -827,33 +827,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Forgot Password - Send OTP
   app.post("/api/auth/forgot-password", async (req, res) => {
     try {
-      const { contact, contactType } = req.body;
+      const { contact, contactType, resend } = req.body;
       if (!contact || !contactType) {
         return res.status(400).json({ message: "Contact and contact type are required" });
       }
 
       // Check if user exists
+
       let user;
       if (contactType === "email") {
         user = await storage.getUserByEmailOnly(contact);
       } else {
-        user = await storage.getUserByPhone(contact);
+        // Normalize phone: remove spaces, ensure +91 prefix
+        let cleanPhone = contact.replace(/\s+/g, '');
+        if (!cleanPhone.startsWith('+91')) {
+          if (cleanPhone.startsWith('91')) {
+            cleanPhone = '+' + cleanPhone;
+          } else if (cleanPhone.length === 10) {
+            cleanPhone = '+91' + cleanPhone;
+          }
+        }
+        user = await storage.getUserByPhone(cleanPhone);
       }
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Generate OTP
-      const otp = generateOTP();
-      const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
+      // If resend=true, always generate and send a new OTP
+      // Otherwise, only generate/send if no valid OTP exists
+      let shouldSendOtp = true;
+      if (!resend) {
+        const existingOtp = otpStorage.get(contact);
+        if (existingOtp && existingOtp.expires > Date.now()) {
+          shouldSendOtp = false;
+        }
+      }
 
-      // Store OTP
-      otpStorage.set(contact, {
-        otp,
-        expires: expiresAt,
-        verified: false
-      });
+      let otp, expiresAt;
+      if (shouldSendOtp) {
+        otp = generateOTP();
+        expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
+        if (contactType === "email") {
+          otpStorage.set(contact, {
+            otp,
+            expires: expiresAt,
+            verified: false
+          });
+        }
+      } else {
+        // Use existing OTP for email
+        if (contactType === "email") {
+          otp = otpStorage.get(contact)?.otp;
+        }
+      }
 
       // Send OTP
       let sent = false;
