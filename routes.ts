@@ -428,6 +428,19 @@ const getUserFromSession = async (req: any): Promise<any | null> => {
   return await storage.getUser(session.userId);
 };
 
+
+const getUserOrGuest = async (req: any) => {
+  const user = await getUserFromSession(req);
+
+  if (user) {
+    return { type: "USER", user };
+  }
+
+  // Guest user
+  return { type: "GUEST" };
+};
+
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Configure global middleware for JSON parsing with increased limit
   app.use(express.json({ limit: '50mb' }));
@@ -659,7 +672,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/auth/signin", async (req, res) => {
+    
+    
     try {
+      
       console.log('Signin attempt:', { email: req.body?.email, hasPassword: !!req.body?.password });
       
       const { email, password } = req.body;
@@ -716,6 +732,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // At this point email and password match; use this user
       const user = userByEmail;
       console.log('Authentication successful for user:', user.id);
+
+      // 🔗 Attach guest addresses to this user after login
+try {
+  await storage.attachGuestAddressesToUser(user.email, user.id);
+  console.log("Guest addresses attached to user:", user.id);
+} catch (err) {
+  console.error("Failed to attach guest addresses:", err);
+  // login should NOT fail if this fails
+}
+
 
       // Create session
       const sessionToken = generateSessionToken();
@@ -3833,142 +3859,223 @@ app.get("/api/categoryuserdata", async (req, res) => {
   });
 
   // Address Management Routes
-  app.get("/api/addresses", async (req, res) => {
-    try {
-      const user = await getUserFromSession(req);
-      if (!user) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
+app.get("/api/addresses", async (req, res) => {
+  try {
+    const identity = await getUserOrGuest(req);
+    console.log("GET addresses - Identity:", { 
+      type: identity.type, 
+      userId: identity.user?.id,
+      userEmail: identity.user?.email 
+    });
 
-      console.log("Fetching addresses for user:", user.id);
-      const addresses = await storage.getUserAddresses(user.id);
-      console.log(`Found ${addresses.length} addresses for user ${user.id}`);
-      res.json(addresses);
-    } catch (error) {
-      console.error("Error fetching addresses:", error);
-      res.status(500).json({ message: "Failed to fetch addresses" });
-    }
-  });
+    let addresses;
 
-  app.post("/api/addresses", async (req, res) => {
-    try {
-      const user = await getUserFromSession(req);
-      if (!user) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
+    if (identity.type === "USER") {
+      // Logged-in user - get all addresses (attached + guest with same email)
+      addresses = await storage.getUserAddresses(identity.user.id);
+    } else {
+      // Guest user - get only guest addresses
+      const queryEmail = req.query.email;
 
-      // Validate the address data
-      const validatedAddress = addressValidationSchema.parse(req.body);
-
-      const addressData = {
-        userId: user.id,
-        ...validatedAddress,
-      };
-
-      const newAddress = await storage.createAddress(addressData);
-
-      // If this address is marked as default, ensure it's the only default address
-      if (validatedAddress.isDefault) {
-        await storage.setDefaultAddress(user.id, newAddress.id);
-        // Get the updated address with correct default status
-        const updatedAddress = await storage.getAddress(newAddress.id);
-        return res.status(201).json(updatedAddress);
-      }
-
-      res.status(201).json(newAddress);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
+      if (!queryEmail) {
         return res.status(400).json({
-          message: "Invalid address data",
-          errors: error.errors
+          message: "Email is required for guest addresses",
         });
       }
-      console.error("Error creating address:", error);
-      // Include a brief detail in development to help diagnose
-      res.status(500).json({ message: "Failed to create address", detail: error instanceof Error ? error.message : String(error) });
-    }
-  });
 
-  app.delete("/api/addresses/:id", async (req, res) => {
-    try {
-      const user = await getUserFromSession(req);
-      if (!user) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
+      // Type-safe handling
+      let email: string;
 
-      const addressId = req.params.id;
-      const existingAddress = await storage.getAddress(addressId);
-      console.log("Existing address fetched:", existingAddress);
-      if (!existingAddress) {
-        return res.status(404).json({ message: "Address not found" });
-      }
-
-      await storage.deleteAddress(addressId);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting address:", error);
-      res.status(500).json({ message: "Failed to delete address" });
-    }
-  });
-
-  app.put("/api/addresses/:id", async (req, res) => {
-    try {
-      const user = await getUserFromSession(req);
-      const addressId = req.params.id;
-      // Check if address exists and belongs to user
-      const existingAddress = await storage.getAddress(addressId);
-      if (!existingAddress) {
-        return res.status(404).json({ message: "Address not found" });
-      }
-
-      // Validate the update data
-      const validatedUpdates = addressValidationSchema.partial().parse(req.body);
-
-      // If this address is being set as default, handle default logic first
-      if (validatedUpdates.isDefault === true) {
-        await storage.setDefaultAddress(user.id, addressId);
-      }
-
-      const updatedAddress = await storage.updateAddress(addressId, validatedUpdates);
-
-      res.json(updatedAddress);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
+      if (Array.isArray(queryEmail)) {
+        if (typeof queryEmail[0] !== "string") {
+          return res.status(400).json({ message: "Invalid email format" });
+        }
+        email = queryEmail[0];
+      } else if (typeof queryEmail === "string") {
+        email = queryEmail;
+      } else {
         return res.status(400).json({
-          message: "Invalid address data",
-          errors: error.errors
+          message: "Invalid email format",
         });
       }
-      console.error("Error updating address:", error);
-      res.status(500).json({ message: "Failed to update address" });
+
+      addresses = await storage.getGuestAddressesByEmail(email);
     }
-  });
 
+    console.log(`Returning ${addresses.length} addresses`);
+    res.json(addresses);
+  } catch (error) {
+    console.error("Error fetching addresses:", error);
+    res.status(500).json({ message: "Failed to fetch addresses" });
+  }
+});
 
-  app.put("/api/addresses/:id/set-default", async (req, res) => {
-    try {
-      const user = await getUserFromSession(req);
-      const addressId = req.params.id;
-      const existingAddress = await storage.getAddress(addressId);
-      if (!existingAddress) {
-        return res.status(404).json({ message: "Address not found" });
+app.post("/api/addresses", async (req, res) => {
+  try {
+    const identity = await getUserOrGuest(req);
+    console.log("POST address - Identity:", { 
+      type: identity.type, 
+      userId: identity.user?.id,
+      userEmail: identity.user?.email 
+    });
+
+    const validatedAddress = addressValidationSchema.parse(req.body);
+
+    let addressData: any = {
+      ...validatedAddress,
+    };
+
+    if (identity.type === "USER") {
+      // Logged-in user
+      addressData.userid = identity.user.id;
+      addressData.email = identity.user.email;
+    } else {
+      // Guest user
+      if (!validatedAddress.email) {
+        return res.status(400).json({
+          message: "Email is required for guest checkout",
+        });
       }
-      // Set the address as default
-      await storage.setDefaultAddress(user.id, addressId);
+      addressData.userid = null;
+      addressData.email = validatedAddress.email;
+    }
 
-      // Get the updated address to return
-      const updatedAddress = await storage.getAddress(addressId);
-
-      res.json({
-        success: true,
-        message: "Default address updated successfully",
-        address: updatedAddress
+    const newAddress = await storage.createAddress(addressData);
+    res.status(201).json(newAddress);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        message: "Invalid address data",
+        errors: error.errors,
       });
-    } catch (error) {
-      console.error("Error setting default address:", error);
-      res.status(500).json({ message: "Failed to set default address" });
     }
-  });
+    console.error("Error creating address:", error);
+    res.status(500).json({ message: "Failed to create address" });
+  }
+});
+
+
+app.delete("/api/addresses/:id", async (req, res) => {
+  try {
+    console.log("DELETE address called");
+    const identity = await getUserOrGuest(req);
+    const addressId = req.params.id;
+
+    console.log("Delete request:", { 
+      addressId, 
+      type: identity.type,
+      userId: identity.user?.id,
+      userEmail: identity.user?.email 
+    });
+
+    // Check ownership before deleting
+    let existingAddress;
+
+    if (identity.type === "USER") {
+      existingAddress = await storage.getAddressWithOwnership(
+        addressId, 
+        identity.user.id
+      );
+    } else {
+      // Guest user
+      const email = typeof req.query.email === "string" 
+        ? req.query.email 
+        : req.body.email;
+      
+      console.log("Guest email for delete:", email);
+      
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({ 
+          message: "Email is required for guest address delete" 
+        });
+      }
+
+      existingAddress = await storage.getAddressWithOwnership(
+        addressId, 
+        undefined, 
+        email
+      );
+    }
+
+    if (!existingAddress) {
+      return res.status(404).json({ message: "Address not found" });
+    }
+
+    await storage.deleteAddress(addressId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting address:", error);
+    res.status(500).json({ message: "Failed to delete address" });
+  }
+});
+
+app.put("/api/addresses/:id", async (req, res) => {
+  try {
+    const identity = await getUserOrGuest(req);
+    const addressId = req.params.id;
+
+    console.log("PUT address:", { 
+      addressId, 
+      type: identity.type,
+      userId: identity.user?.id,
+      userEmail: identity.user?.email 
+    });
+
+    // Check ownership before updating
+    let existingAddress;
+
+    if (identity.type === "USER") {
+      existingAddress = await storage.getAddressWithOwnership(
+        addressId, 
+        identity.user.id
+      );
+      
+      if (!existingAddress) {
+        return res.status(404).json({ message: "Address not found" });
+      }
+
+      // Handle default address
+      if (req.body.isDefault === true) {
+        await storage.setDefaultAddress(identity.user.id, addressId);
+      }
+    } else {
+      // Guest user
+      const email = req.body.email || req.query.email;
+
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({
+          message: "Email is required for guest address update"
+        });
+      }
+
+      existingAddress = await storage.getAddressWithOwnership(
+        addressId, 
+        undefined, 
+        email
+      );
+
+      if (!existingAddress) {
+        return res.status(404).json({ message: "Address not found" });
+      }
+    }
+
+    const validatedUpdates = addressValidationSchema.partial().parse(req.body);
+    const updatedAddress = await storage.updateAddress(addressId, validatedUpdates);
+
+    res.json(updatedAddress);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        message: "Invalid address data",
+        errors: error.errors,
+      });
+    }
+    console.error("Error updating address:", error);
+    res.status(500).json({ message: "Failed to update address" });
+  }
+});
+
+
 
   // Delivery Options Routes
   app.get("/api/delivery-options", async (req, res) => {

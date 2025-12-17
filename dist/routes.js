@@ -399,6 +399,14 @@ const getUserFromSession = async (req) => {
     }
     return await storage.getUser(session.userId);
 };
+const getUserOrGuest = async (req) => {
+    const user = await getUserFromSession(req);
+    if (user) {
+        return { type: "USER", user };
+    }
+    // Guest user
+    return { type: "GUEST" };
+};
 export async function registerRoutes(app) {
     // Configure global middleware for JSON parsing with increased limit
     app.use(express.json({ limit: '50mb' }));
@@ -661,6 +669,15 @@ export async function registerRoutes(app) {
             // At this point email and password match; use this user
             const user = userByEmail;
             console.log('Authentication successful for user:', user.id);
+            // 🔗 Attach guest addresses to this user after login
+            try {
+                await storage.attachGuestAddressesToUser(user.email, user.id);
+                console.log("Guest addresses attached to user:", user.id);
+            }
+            catch (err) {
+                console.error("Failed to attach guest addresses:", err);
+                // login should NOT fail if this fails
+            }
             // Create session
             const sessionToken = generateSessionToken();
             const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
@@ -761,7 +778,7 @@ export async function registerRoutes(app) {
     // Forgot Password - Send OTP
     app.post("/api/auth/forgot-password", async (req, res) => {
         try {
-            const { contact, contactType } = req.body;
+            const { contact, contactType, resend } = req.body;
             if (!contact || !contactType) {
                 return res.status(400).json({ message: "Contact and contact type are required" });
             }
@@ -771,20 +788,48 @@ export async function registerRoutes(app) {
                 user = await storage.getUserByEmailOnly(contact);
             }
             else {
-                user = await storage.getUserByPhone(contact);
+                // Normalize phone: remove spaces, ensure +91 prefix
+                let cleanPhone = contact.replace(/\s+/g, '');
+                if (!cleanPhone.startsWith('+91')) {
+                    if (cleanPhone.startsWith('91')) {
+                        cleanPhone = '+' + cleanPhone;
+                    }
+                    else if (cleanPhone.length === 10) {
+                        cleanPhone = '+91' + cleanPhone;
+                    }
+                }
+                user = await storage.getUserByPhone(cleanPhone);
             }
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
-            // Generate OTP
-            const otp = generateOTP();
-            const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
-            // Store OTP
-            otpStorage.set(contact, {
-                otp,
-                expires: expiresAt,
-                verified: false
-            });
+            // If resend=true, always generate and send a new OTP
+            // Otherwise, only generate/send if no valid OTP exists
+            let shouldSendOtp = true;
+            if (!resend) {
+                const existingOtp = otpStorage.get(contact);
+                if (existingOtp && existingOtp.expires > Date.now()) {
+                    shouldSendOtp = false;
+                }
+            }
+            let otp, expiresAt;
+            if (shouldSendOtp) {
+                otp = generateOTP();
+                expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
+                if (contactType === "email") {
+                    otpStorage.set(contact, {
+                        otp,
+                        expires: expiresAt,
+                        verified: false
+                    });
+                }
+            }
+            else {
+                // Use existing OTP for email
+                if (contactType === "email") {
+                    otp = otpStorage.get(contact)?.otp;
+                }
+            }
             // Send OTP
             let sent = false;
             if (contactType === "email") {
@@ -3459,13 +3504,44 @@ export async function registerRoutes(app) {
     // Address Management Routes
     app.get("/api/addresses", async (req, res) => {
         try {
-            const user = await getUserFromSession(req);
-            if (!user) {
-                return res.status(401).json({ message: "Authentication required" });
+            const identity = await getUserOrGuest(req);
+            console.log("GET addresses - Identity:", {
+                type: identity.type,
+                userId: identity.user?.id,
+                userEmail: identity.user?.email
+            });
+            let addresses;
+            if (identity.type === "USER") {
+                // Logged-in user - get all addresses (attached + guest with same email)
+                addresses = await storage.getUserAddresses(identity.user.id);
             }
-            console.log("Fetching addresses for user:", user.id);
-            const addresses = await storage.getUserAddresses(user.id);
-            console.log(`Found ${addresses.length} addresses for user ${user.id}`);
+            else {
+                // Guest user - get only guest addresses
+                const queryEmail = req.query.email;
+                if (!queryEmail) {
+                    return res.status(400).json({
+                        message: "Email is required for guest addresses",
+                    });
+                }
+                // Type-safe handling
+                let email;
+                if (Array.isArray(queryEmail)) {
+                    if (typeof queryEmail[0] !== "string") {
+                        return res.status(400).json({ message: "Invalid email format" });
+                    }
+                    email = queryEmail[0];
+                }
+                else if (typeof queryEmail === "string") {
+                    email = queryEmail;
+                }
+                else {
+                    return res.status(400).json({
+                        message: "Invalid email format",
+                    });
+                }
+                addresses = await storage.getGuestAddressesByEmail(email);
+            }
+            console.log(`Returning ${addresses.length} addresses`);
             res.json(addresses);
         }
         catch (error) {
@@ -3475,47 +3551,74 @@ export async function registerRoutes(app) {
     });
     app.post("/api/addresses", async (req, res) => {
         try {
-            const user = await getUserFromSession(req);
-            if (!user) {
-                return res.status(401).json({ message: "Authentication required" });
-            }
-            // Validate the address data
+            const identity = await getUserOrGuest(req);
+            console.log("POST address - Identity:", {
+                type: identity.type,
+                userId: identity.user?.id,
+                userEmail: identity.user?.email
+            });
             const validatedAddress = addressValidationSchema.parse(req.body);
-            const addressData = {
-                userId: user.id,
+            let addressData = {
                 ...validatedAddress,
             };
-            const newAddress = await storage.createAddress(addressData);
-            // If this address is marked as default, ensure it's the only default address
-            if (validatedAddress.isDefault) {
-                await storage.setDefaultAddress(user.id, newAddress.id);
-                // Get the updated address with correct default status
-                const updatedAddress = await storage.getAddress(newAddress.id);
-                return res.status(201).json(updatedAddress);
+            if (identity.type === "USER") {
+                // Logged-in user
+                addressData.userid = identity.user.id;
+                addressData.email = identity.user.email;
             }
+            else {
+                // Guest user
+                if (!validatedAddress.email) {
+                    return res.status(400).json({
+                        message: "Email is required for guest checkout",
+                    });
+                }
+                addressData.userid = null;
+                addressData.email = validatedAddress.email;
+            }
+            const newAddress = await storage.createAddress(addressData);
             res.status(201).json(newAddress);
         }
         catch (error) {
             if (error instanceof z.ZodError) {
                 return res.status(400).json({
                     message: "Invalid address data",
-                    errors: error.errors
+                    errors: error.errors,
                 });
             }
             console.error("Error creating address:", error);
-            // Include a brief detail in development to help diagnose
-            res.status(500).json({ message: "Failed to create address", detail: error instanceof Error ? error.message : String(error) });
+            res.status(500).json({ message: "Failed to create address" });
         }
     });
     app.delete("/api/addresses/:id", async (req, res) => {
         try {
-            const user = await getUserFromSession(req);
-            if (!user) {
-                return res.status(401).json({ message: "Authentication required" });
-            }
+            console.log("DELETE address called");
+            const identity = await getUserOrGuest(req);
             const addressId = req.params.id;
-            const existingAddress = await storage.getAddress(addressId);
-            console.log("Existing address fetched:", existingAddress);
+            console.log("Delete request:", {
+                addressId,
+                type: identity.type,
+                userId: identity.user?.id,
+                userEmail: identity.user?.email
+            });
+            // Check ownership before deleting
+            let existingAddress;
+            if (identity.type === "USER") {
+                existingAddress = await storage.getAddressWithOwnership(addressId, identity.user.id);
+            }
+            else {
+                // Guest user
+                const email = typeof req.query.email === "string"
+                    ? req.query.email
+                    : req.body.email;
+                console.log("Guest email for delete:", email);
+                if (!email || typeof email !== "string") {
+                    return res.status(400).json({
+                        message: "Email is required for guest address delete"
+                    });
+                }
+                existingAddress = await storage.getAddressWithOwnership(addressId, undefined, email);
+            }
             if (!existingAddress) {
                 return res.status(404).json({ message: "Address not found" });
             }
@@ -3529,19 +3632,40 @@ export async function registerRoutes(app) {
     });
     app.put("/api/addresses/:id", async (req, res) => {
         try {
-            const user = await getUserFromSession(req);
+            const identity = await getUserOrGuest(req);
             const addressId = req.params.id;
-            // Check if address exists and belongs to user
-            const existingAddress = await storage.getAddress(addressId);
-            if (!existingAddress) {
-                return res.status(404).json({ message: "Address not found" });
+            console.log("PUT address:", {
+                addressId,
+                type: identity.type,
+                userId: identity.user?.id,
+                userEmail: identity.user?.email
+            });
+            // Check ownership before updating
+            let existingAddress;
+            if (identity.type === "USER") {
+                existingAddress = await storage.getAddressWithOwnership(addressId, identity.user.id);
+                if (!existingAddress) {
+                    return res.status(404).json({ message: "Address not found" });
+                }
+                // Handle default address
+                if (req.body.isDefault === true) {
+                    await storage.setDefaultAddress(identity.user.id, addressId);
+                }
             }
-            // Validate the update data
+            else {
+                // Guest user
+                const email = req.body.email || req.query.email;
+                if (!email || typeof email !== "string") {
+                    return res.status(400).json({
+                        message: "Email is required for guest address update"
+                    });
+                }
+                existingAddress = await storage.getAddressWithOwnership(addressId, undefined, email);
+                if (!existingAddress) {
+                    return res.status(404).json({ message: "Address not found" });
+                }
+            }
             const validatedUpdates = addressValidationSchema.partial().parse(req.body);
-            // If this address is being set as default, handle default logic first
-            if (validatedUpdates.isDefault === true) {
-                await storage.setDefaultAddress(user.id, addressId);
-            }
             const updatedAddress = await storage.updateAddress(addressId, validatedUpdates);
             res.json(updatedAddress);
         }
@@ -3549,34 +3673,11 @@ export async function registerRoutes(app) {
             if (error instanceof z.ZodError) {
                 return res.status(400).json({
                     message: "Invalid address data",
-                    errors: error.errors
+                    errors: error.errors,
                 });
             }
             console.error("Error updating address:", error);
             res.status(500).json({ message: "Failed to update address" });
-        }
-    });
-    app.put("/api/addresses/:id/set-default", async (req, res) => {
-        try {
-            const user = await getUserFromSession(req);
-            const addressId = req.params.id;
-            const existingAddress = await storage.getAddress(addressId);
-            if (!existingAddress) {
-                return res.status(404).json({ message: "Address not found" });
-            }
-            // Set the address as default
-            await storage.setDefaultAddress(user.id, addressId);
-            // Get the updated address to return
-            const updatedAddress = await storage.getAddress(addressId);
-            res.json({
-                success: true,
-                message: "Default address updated successfully",
-                address: updatedAddress
-            });
-        }
-        catch (error) {
-            console.error("Error setting default address:", error);
-            res.status(500).json({ message: "Failed to set default address" });
         }
     });
     // Delivery Options Routes

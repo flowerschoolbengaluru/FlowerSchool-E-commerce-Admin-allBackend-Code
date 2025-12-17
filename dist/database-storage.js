@@ -4,6 +4,7 @@ export async function getAllCustomRequests() {
     return result.rows;
 }
 import { db } from "./db.js";
+import { randomUUID } from 'crypto';
 // Custom error to signal dependency/foreign-key constraint issues
 export class DependencyError extends Error {
     constructor(message, detail) {
@@ -15,6 +16,18 @@ export class DependencyError extends Error {
     }
 }
 export class DatabaseStorage {
+    async getGuestAddressByIdAndEmail(addressId, email) {
+        const result = await db.query(`
+    SELECT *
+    FROM bouquetbar.addresses
+    WHERE id = $1 
+      AND email = $2 
+      AND userid IS NULL
+      AND isactive = true
+    LIMIT 1
+    `, [addressId, email]);
+        return result.rows[0];
+    }
     async getUser(id) {
         try {
             if (!id) {
@@ -2933,83 +2946,6 @@ ORDER BY B.createdat DESC; `;
             throw error;
         }
     }
-    async createAddress(address) {
-        try {
-            // ✅ If default, unset other default addresses first
-            if (address.isDefault) {
-                const unsetQuery = `
-          UPDATE bouquetbar.addresses
-          SET isdefault = false, updatedat = NOW()
-          WHERE userid = '${address.userId}' AND isdefault = true;
-        `;
-                await db.query(unsetQuery);
-            }
-            // ✅ Insert new address into addresses table using parameterized query
-            const insertQuery = {
-                text: `
-        INSERT INTO bouquetbar.addresses (
-          userid, fullname, phone, email, addressline1, addressline2, landmark,
-          city, state, postalcode, country, addresstype, isdefault, isactive, createdat, updatedat
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, NOW(), NOW())
-        RETURNING *;
-      `,
-                values: [
-                    address.userId,
-                    address.fullName,
-                    address.phone,
-                    address.email || null,
-                    address.addressLine1,
-                    address.addressLine2 || null,
-                    address.landmark || null,
-                    address.city,
-                    address.state,
-                    address.postalCode,
-                    address.country || 'India',
-                    address.addressType || 'Home',
-                    address.isDefault ? true : false,
-                ]
-            };
-            const result = await db.query(insertQuery.text, insertQuery.values);
-            return result.rows[0];
-        }
-        catch (error) {
-            console.error("Error in createAddress:", error);
-            throw new Error(`Failed to insert address: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
-    }
-    async setDefaultAddress(userId, addressId) {
-        try {
-            console.log('=== SET DEFAULT ADDRESS ===');
-            console.log('User ID:', userId);
-            console.log('Address ID:', addressId);
-            // 1️⃣ Remove default from all addresses of this user
-            const unsetQuery = `
-      UPDATE bouquetbar.addresses
-      SET isdefault = false, updatedat = NOW()
-      WHERE userid = '${userId}' AND isdefault = true AND isactive = true
-    `;
-            console.log('Unsetting default query:', unsetQuery);
-            await db.query(unsetQuery);
-            // 2️⃣ Set the new default address
-            const setQuery = `
-      UPDATE bouquetbar.addresses
-      SET isdefault = true, updatedat = NOW()
-      WHERE id = '${addressId}' AND userid = '${userId}' AND isactive = true
-    `;
-            console.log('Setting default query:', setQuery);
-            const result = await db.query(setQuery);
-            console.log('Set default result:', result);
-            console.log('Rows affected:', result.rowCount);
-            if (result.rowCount === 0) {
-                throw new Error('Address not found or does not belong to user');
-            }
-        }
-        catch (error) {
-            console.error("Error in setDefaultAddress:", error);
-            throw new Error(`Failed to set default address: ${error instanceof Error ? error.message : "Unknown error"}`);
-        }
-    }
     async createDeliveryOption(option) {
         try {
             const query = `
@@ -3036,39 +2972,286 @@ ORDER BY B.createdat DESC; `;
         }
     }
     async getUserAddresses(userId) {
-        const query = `
-    SELECT *
-    FROM bouquetbar.addresses
-    WHERE userid = '${userId}'
-            AND isactive=true
-    ORDER BY createdat;
-  `;
-        const result = await db.query(query);
+        try {
+            // First get user's email from users table
+            const userQuery = `SELECT email FROM bouquetbar.users WHERE id = $1`;
+            const userResult = await db.query(userQuery, [userId]);
+            if (userResult.rows.length === 0) {
+                console.log("User not found with ID:", userId);
+                return [];
+            }
+            const userEmail = userResult.rows[0].email;
+            console.log("Fetching addresses for user:", { userId, userEmail });
+            // Get ALL addresses for this user:
+            // 1. Addresses with userid = userId (already attached)
+            // 2. Guest addresses with same email (not yet attached)
+            const query = `
+      SELECT *
+      FROM bouquetbar.addresses
+      WHERE (
+        userid = $1 
+        OR (userid IS NULL AND email = $2)
+      )
+      AND isactive = true
+      ORDER BY createdat DESC;
+    `;
+            const result = await db.query(query, [userId, userEmail]);
+            console.log(`Found ${result.rows.length} addresses for user ${userId}`);
+            return result.rows;
+        }
+        catch (error) {
+            console.error("Error in getUserAddresses:", error);
+            throw error;
+        }
+    }
+    // 2. Get addresses for guest user
+    async getGuestAddressesByEmail(email) {
+        const result = await db.query(`SELECT *
+     FROM bouquetbar.addresses 
+     WHERE email = $1 
+       AND userid IS NULL 
+       AND isactive = true
+     ORDER BY createdat DESC`, [email]);
         return result.rows;
     }
-    async deleteAddress(id) {
+    // 3. Create address (handles both user and guest)
+    async createAddress(addressData) {
+        // Map frontend fields to database fields
+        const dbData = {
+            fullname: addressData.fullName || addressData.fullname,
+            phone: addressData.phone,
+            addressline1: addressData.addressLine1 || addressData.addressline1,
+            addressline2: addressData.addressLine2 || addressData.addressline2,
+            landmark: addressData.landmark,
+            city: addressData.city,
+            state: addressData.state,
+            postalcode: addressData.postalCode || addressData.postalcode,
+            country: addressData.country,
+            addresstype: addressData.addressType || addressData.addresstype,
+            isdefault: addressData.isDefault || addressData.isdefault || false,
+            email: addressData.email,
+            userid: addressData.userid || addressData.userId || null
+        };
+        // Validate required fields
+        if (!dbData.fullname)
+            throw new Error("Full name is required");
+        if (!dbData.addressline1)
+            throw new Error("Address line 1 is required");
+        if (!dbData.postalcode)
+            throw new Error("Postal code is required");
+        if (!dbData.addresstype)
+            throw new Error("Address type is required");
+        const query = `
+    INSERT INTO bouquetbar.addresses (
+      id, userid, email, fullname, phone, addressline1, addressline2,
+      landmark, city, state, postalcode, country, addresstype,
+      isdefault, isactive, createdat, updatedat
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, NOW(), NOW()
+    )
+    RETURNING *;
+  `;
+        const id = randomUUID();
+        const result = await db.query(query, [
+            id,
+            dbData.userid,
+            dbData.email,
+            dbData.fullname,
+            dbData.phone,
+            dbData.addressline1,
+            dbData.addressline2,
+            dbData.landmark,
+            dbData.city,
+            dbData.state,
+            dbData.postalcode,
+            dbData.country,
+            dbData.addresstype,
+            dbData.isdefault
+        ]);
+        return result.rows[0];
+    }
+    // 4. Update address with proper ownership check
+    async updateAddress(id, updates) {
+        console.log("Raw updates received:", updates);
+        // Convert frontend field names to database field names
+        const dbUpdates = {};
+        // Map camelCase to snake_case (without underscores in the middle)
+        if (updates.fullName !== undefined)
+            dbUpdates.fullname = updates.fullName;
+        if (updates.fullname !== undefined)
+            dbUpdates.fullname = updates.fullname;
+        if (updates.phone !== undefined)
+            dbUpdates.phone = updates.phone;
+        if (updates.addressLine1 !== undefined)
+            dbUpdates.addressline1 = updates.addressLine1;
+        if (updates.addressline1 !== undefined)
+            dbUpdates.addressline1 = updates.addressline1;
+        if (updates.addressLine2 !== undefined)
+            dbUpdates.addressline2 = updates.addressLine2;
+        if (updates.addressline2 !== undefined)
+            dbUpdates.addressline2 = updates.addressline2;
+        if (updates.landmark !== undefined)
+            dbUpdates.landmark = updates.landmark;
+        if (updates.city !== undefined)
+            dbUpdates.city = updates.city;
+        if (updates.state !== undefined)
+            dbUpdates.state = updates.state;
+        if (updates.postalCode !== undefined)
+            dbUpdates.postalcode = updates.postalCode;
+        if (updates.postalcode !== undefined)
+            dbUpdates.postalcode = updates.postalcode;
+        if (updates.country !== undefined)
+            dbUpdates.country = updates.country;
+        if (updates.addressType !== undefined)
+            dbUpdates.addresstype = updates.addressType;
+        if (updates.addresstype !== undefined)
+            dbUpdates.addresstype = updates.addresstype;
+        if (updates.isDefault !== undefined)
+            dbUpdates.isdefault = updates.isDefault;
+        if (updates.isdefault !== undefined)
+            dbUpdates.isdefault = updates.isdefault;
+        if (updates.email !== undefined)
+            dbUpdates.email = updates.email;
+        console.log("Converted updates for database:", dbUpdates);
+        // If no valid updates, return the current address
+        if (Object.keys(dbUpdates).length === 0) {
+            const current = await this.getAddressById(id);
+            if (!current)
+                throw new Error("Address not found");
+            return current;
+        }
+        // Build dynamic update query
+        const updateFields = [];
+        const values = [];
+        let paramCount = 1;
+        for (const [key, value] of Object.entries(dbUpdates)) {
+            // Use the actual database column names (already in snake_case)
+            updateFields.push(`${key} = $${paramCount}`);
+            values.push(value);
+            paramCount++;
+        }
+        // Always update updatedat
+        updateFields.push(`updatedat = NOW()`);
         const query = `
     UPDATE bouquetbar.addresses
-    SET isactive = false, updatedat = NOW() 
-    WHERE id = '${id}' AND isactive=true;
+    SET ${updateFields.join(', ')}
+    WHERE id = $${paramCount} AND isactive = true
+    RETURNING *;
   `;
-        await db.query(query);
+        values.push(id);
+        console.log("Update query:", query);
+        console.log("Update values:", values);
+        const result = await db.query(query, values);
+        if (result.rows.length === 0) {
+            throw new Error("Address not found or already deleted");
+        }
+        console.log("Address updated successfully:", result.rows[0].id);
+        return result.rows[0];
     }
-    async getAddress(id) {
+    // Add this helper method if you don't have it
+    async getAddressById(id) {
+        const result = await db.query(`SELECT * FROM bouquetbar.addresses WHERE id = $1 AND isactive = true LIMIT 1`, [id]);
+        return result.rows[0];
+    }
+    // 5. Soft delete address
+    async deleteAddress(id) {
+        await db.query(`UPDATE bouquetbar.addresses 
+     SET isactive = false, updatedat = NOW() 
+     WHERE id = $1 AND isactive = true`, [id]);
+    }
+    // 6. Get address with ownership check
+    async getAddressWithOwnership(id, userId, email) {
+        let query = `
+    SELECT *
+    FROM bouquetbar.addresses
+    WHERE id = $1
+      AND isactive = true
+  `;
+        const params = [id];
+        let paramCount = 1;
+        if (userId) {
+            // For logged-in user: address must belong to user OR be a guest address with matching email
+            paramCount++;
+            query += ` AND (
+      userid::text = $${paramCount} 
+      OR (userid IS NULL AND email IN (
+        SELECT email FROM bouquetbar.users WHERE id::text = $${paramCount}
+      ))
+    )`;
+            params.push(userId);
+        }
+        else if (email) {
+            // For guest user: address must have matching email AND no userid
+            paramCount++;
+            query += ` AND email = $${paramCount} AND userid IS NULL`;
+            params.push(email);
+        }
+        query += ` LIMIT 1`;
+        console.log("getAddressWithOwnership query:", query, "params:", params);
+        const result = await db.query(query, params);
+        return result.rows[0];
+    }
+    // 7. Attach guest addresses to user on login (IMPORTANT!)
+    async attachGuestAddressesToUser(email, userId) {
+        try {
+            console.log(`Attaching guest addresses for ${email} to user ${userId}`);
+            const result = await db.query(`UPDATE bouquetbar.addresses
+       SET userid = $1, updatedat = NOW()
+       WHERE email = $2
+         AND userid IS NULL
+         AND isactive = true
+       RETURNING id`, [userId, email]);
+            console.log(`Attached ${result.rows.length} guest addresses`);
+            return result.rows.length;
+        }
+        catch (error) {
+            console.error("Error attaching guest addresses:", error);
+            return 0;
+        }
+    }
+    // 8. Set default address
+    async setDefaultAddress(userId, addressId) {
+        // First reset all defaults for this user
+        await db.query(`UPDATE bouquetbar.addresses
+     SET isdefault = false, updatedat = NOW()
+     WHERE (userid = $1 OR email IN (
+       SELECT email FROM bouquetbar.users WHERE id = $1
+     ))
+     AND isactive = true`, [userId]);
+        // Then set the new default
+        await db.query(`UPDATE bouquetbar.addresses
+     SET isdefault = true, updatedat = NOW()
+     WHERE id = $1 AND isactive = true`, [addressId]);
+    }
+    async getAddress(id, userId, email) {
         try {
             if (!id) {
                 throw new Error("Address ID is required");
             }
-            const query = `
+            let query = `
       SELECT *
       FROM bouquetbar.addresses
-      WHERE id = '${id}'
-        AND isactive=true
-      LIMIT 1;
+      WHERE id = $1
+        AND isactive = true
     `;
-            console.log("Executing query:", query);
-            const result = await db.query(query);
-            console.log("Query Result:", result.rows || "No address found");
+            const params = [id];
+            let paramCount = 1;
+            // Add user ID filter if provided (for logged-in users)
+            if (userId) {
+                paramCount++;
+                query += ` AND userid = $${paramCount}`;
+                params.push(userId);
+            }
+            // Add email filter if provided (for guest users)
+            if (email && !userId) {
+                paramCount++;
+                query += ` AND email = $${paramCount} AND userid IS NULL`;
+                params.push(email);
+            }
+            query += ` LIMIT 1`;
+            console.log("Executing query:", query, "with params:", params);
+            const result = await db.query(query, params);
+            console.log("Query Result:", result.rows[0] ? "Address found" : "No address found");
             return result.rows[0] || undefined;
         }
         catch (error) {
@@ -3306,51 +3489,6 @@ ORDER BY B.createdat DESC; `;
             throw new Error('Coupon not found');
         }
         return result.rows[0];
-    }
-    async updateAddress(id, updates) {
-        try {
-            const updateFields = [];
-            if (updates.fullName)
-                updateFields.push(`fullname = '${updates.fullName}'`);
-            if (updates.phone)
-                updateFields.push(`phone = '${updates.phone}'`);
-            if (updates.email)
-                updateFields.push(`email = '${updates.email}'`);
-            if (updates.addressLine1)
-                updateFields.push(`addressline1 = '${updates.addressLine1}'`);
-            if (updates.addressLine2 !== undefined)
-                updateFields.push(`addressline2 = ${updates.addressLine2 ? `'${updates.addressLine2}'` : 'NULL'}`);
-            if (updates.landmark !== undefined)
-                updateFields.push(`landmark = ${updates.landmark ? `'${updates.landmark}'` : 'NULL'}`);
-            if (updates.city)
-                updateFields.push(`city = '${updates.city}'`);
-            if (updates.state)
-                updateFields.push(`state = '${updates.state}'`);
-            if (updates.postalCode)
-                updateFields.push(`postalcode = '${updates.postalCode}'`);
-            if (updates.country)
-                updateFields.push(`country = '${updates.country}'`);
-            if (updates.addressType)
-                updateFields.push(`addresstype = '${updates.addressType}'`);
-            if (updates.isDefault !== undefined)
-                updateFields.push(`isdefault = ${updates.isDefault}`);
-            updateFields.push(`updatedat = NOW()`);
-            const query = `
-        UPDATE bouquetbar.addresses
-        SET ${updateFields.join(', ')}
-        WHERE id = '${id}' AND isactive = true
-        RETURNING *;
-      `;
-            const result = await db.query(query);
-            if (!result.rows[0]) {
-                throw new Error(`Address with id ${id} not found`);
-            }
-            return result.rows[0];
-        }
-        catch (error) {
-            console.error('Error in updateAddress:', error);
-            throw new Error(`Failed to update address: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
     }
     async validateCoupon(code, orderSubtotal) {
         const coupon = await this.getCoupon(code);

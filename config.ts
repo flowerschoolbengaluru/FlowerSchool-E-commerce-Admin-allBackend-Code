@@ -11,9 +11,9 @@ export const config = {
     keySecret: process.env.RAZORPAY_KEY_SECRET || "1juiyC5dHOV8i1x1oK4veoD7"
   },
   twilio: {
-    accountSid: process.env.TWILIO_ACCOUNT_SID || "AC33481cb2b9a8c5cd0e7ebfa5e7ef41be",
-    authToken: process.env.TWILIO_AUTH_TOKEN || "7ddb7af8955984a2f393dd09f74eec16",
-    verifyServiceSid: process.env.TWILIO_SERVICE_SID || "VAb363f196c6b6bf4367dcac40bce2704b",
+    accountSid: process.env.TWILIO_ACCOUNT_SID || "",
+    authToken: process.env.TWILIO_AUTH_TOKEN || "",
+    verifyServiceSid: process.env.TWILIO_SERVICE_SID || "",
     sms: {
       fromNumber: process.env.TWILIO_PHONE_NUMBER || "+18633431421",
       phoneNumber: process.env.TWILIO_PHONE_NUMBER || ""

@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { DatabaseStorage } from "./database-storage.js";
 
 export interface IStorage {
+  
   // Users
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -15,7 +16,7 @@ export interface IStorage {
   updateUser(id: string, updates: Partial<User>): Promise<User>;
   updateUserProfile(id: string, profile: Partial<User>): Promise<User>;
   deleteUser(id: string): Promise<void>;
-  
+   getUserAddresses(userId: string): Promise<Address[]>;
   // Products
   getAllProducts(): Promise<Product[]>;
   getFeaturedProducts(): Promise<Product[]>;
