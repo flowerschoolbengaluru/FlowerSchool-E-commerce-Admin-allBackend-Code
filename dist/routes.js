@@ -775,83 +775,71 @@ export async function registerRoutes(app) {
             res.status(500).json({ message: "Failed to sign out" });
         }
     });
-    // Forgot Password - Send OTP
     app.post("/api/auth/forgot-password", async (req, res) => {
         try {
-            const { contact, contactType, resend } = req.body;
-            if (!contact || !contactType) {
-                return res.status(400).json({ message: "Contact and contact type are required" });
+            const { contact, contactType, email, resend } = req.body;
+            if (!contact || contactType !== "phone") {
+                return res.status(400).json({
+                    message: "Phone number is required"
+                });
             }
-            // Check if user exists
-            let user;
-            if (contactType === "email") {
-                user = await storage.getUserByEmailOnly(contact);
+            // Normalize phone
+            let cleanPhone = contact.replace(/\s+/g, "");
+            if (!cleanPhone.startsWith("+91")) {
+                if (cleanPhone.startsWith("91"))
+                    cleanPhone = "+" + cleanPhone;
+                else if (cleanPhone.length === 10)
+                    cleanPhone = "+91" + cleanPhone;
             }
-            else {
-                // Normalize phone: remove spaces, ensure +91 prefix
-                let cleanPhone = contact.replace(/\s+/g, '');
-                if (!cleanPhone.startsWith('+91')) {
-                    if (cleanPhone.startsWith('91')) {
-                        cleanPhone = '+' + cleanPhone;
-                    }
-                    else if (cleanPhone.length === 10) {
-                        cleanPhone = '+91' + cleanPhone;
-                    }
-                }
-                user = await storage.getUserByPhone(cleanPhone);
-            }
-            if (!user) {
-                return res.status(404).json({ message: "User not found" });
-            }
-            // If resend=true, always generate and send a new OTP
-            // Otherwise, only generate/send if no valid OTP exists
-            let shouldSendOtp = true;
-            if (!resend) {
-                const existingOtp = otpStorage.get(contact);
-                if (existingOtp && existingOtp.expires > Date.now()) {
-                    shouldSendOtp = false;
-                }
-            }
-            let otp, expiresAt;
-            if (shouldSendOtp) {
-                otp = generateOTP();
-                expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
-                if (contactType === "email") {
-                    otpStorage.set(contact, {
-                        otp,
-                        expires: expiresAt,
-                        verified: false
+            // 🔁 RESEND OTP FLOW (NO EMAIL CHECK)
+            if (resend === true) {
+                const user = await storage.getUserByPhone(cleanPhone);
+                if (!user) {
+                    return res.status(404).json({
+                        message: "User not found with this phone number"
                     });
                 }
-            }
-            else {
-                // Use existing OTP for email
-                if (contactType === "email") {
-                    otp = otpStorage.get(contact)?.otp;
+                const sent = await sendVerificationCode(cleanPhone);
+                if (!sent) {
+                    return res.status(500).json({
+                        message: "Failed to resend OTP"
+                    });
                 }
+                return res.json({
+                    message: "OTP resent to registered phone number"
+                });
             }
-            // Send OTP
-            let sent = false;
-            if (contactType === "email") {
-                sent = await sendEmail(contact, "Password Reset - Bouquet Bar", `Your verification code is: ${otp}. This code will expire in 10 minutes.`);
+            // 🔐 FIRST TIME FLOW (EMAIL + PHONE)
+            if (!email) {
+                return res.status(400).json({
+                    message: "Email is required"
+                });
             }
-            else {
-                // Format phone number for SMS using Twilio Verify
-                const formattedPhone = contact.startsWith('+') ? contact : `+91${contact}`;
-                sent = await sendVerificationCode(formattedPhone);
-                // Don't store OTP for phone since Twilio Verify handles it
-                if (sent) {
-                    otpStorage.delete(contact); // Remove from local storage since Twilio handles it
-                }
+            const userByPhone = await storage.getUserByPhone(cleanPhone);
+            const userByEmail = await storage.getUserByEmailOnly(email.trim().toLowerCase());
+            if (!userByPhone || !userByEmail) {
+                return res.status(404).json({ message: "User not found" });
             }
+            if (userByPhone.id !== userByEmail.id) {
+                return res.status(400).json({
+                    message: "Email and phone number do not belong to the same account"
+                });
+            }
+            const sent = await sendVerificationCode(cleanPhone);
             if (!sent) {
-                return res.status(500).json({ message: `Failed to send OTP via ${contactType}` });
+                return res.status(500).json({
+                    message: "Failed to send OTP"
+                });
             }
-            res.json({ message: `OTP sent to your ${contactType}` });
+            return res.json({
+                message: "OTP sent to registered phone number"
+            });
         }
         catch (error) {
             console.error("Forgot password error:", error);
-            res.status(500).json({ message: "Failed to send OTP" });
+            return res.status(500).json({
+                message: "Something went wrong"
+            });
         }
     });
     // Verify OTP

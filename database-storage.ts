@@ -177,17 +177,19 @@ async getGuestAddressByIdAndEmail(addressId: string, email: string) {
     }
   }
 
-  async getUserByPhone(phone: string): Promise < User | undefined > {
-  if(!phone) return undefined;
-  const query = `SELECT *
-            FROM bouquetbar.users
-            WHERE phone = '${phone}'
-            LIMIT 1`;
-  console.log('Executing query:', query);
-  const result = await db.query(query);
-  console.log('Query Result:', result.rows || 'No user found');
+async getUserByPhone(phone: string): Promise<User | undefined> {
+  if (!phone) return undefined;
+
+  const query = `
+    SELECT * FROM bouquetbar.users
+    WHERE phone = $1
+    LIMIT 1
+  `;
+
+  const result = await db.query(query, [phone]);
   return result.rows[0] || undefined;
 }
+
 
   // Check if any user account uses the given password
   async passwordExists(password: string): Promise<boolean> {
