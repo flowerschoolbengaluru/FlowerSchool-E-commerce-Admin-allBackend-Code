@@ -5998,13 +5998,17 @@ app.get("/api/admin/orders", async (req, res) => {
     }
   });
 
-
+        console.log("Fetching impacts...");
 
   // Impacts endpoints (key/value)
   app.get('/api/impacts', async (req, res) => {
+
+
     try {
+      console.log('GET /api/impacts called');
       const impacts = await storage.getImpacts();
-      res.json(impacts);
+      console.log('Impacts result:', impacts);
+      res.json({ success: true, data: impacts, count: Array.isArray(impacts) ? impacts.length : 0 });
     } catch (error) {
       console.error('Error fetching impacts:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch impacts' });
@@ -6013,20 +6017,12 @@ app.get("/api/admin/orders", async (req, res) => {
 
   app.post('/api/impacts', async (req, res) => {
     try {
-      // const user = await getUserFromSession(req);
-      // if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-      // const isAdmin = config.admin.emails.includes(user.email) || user.userType === 'admin';
-      // if (!isAdmin) return res.status(403).json({ success: false, error: 'Forbidden - Admin only' });
 
       const { title, value } = req.body;
       // Validate input
       if (!title || value === undefined) return res.status(400).json({ success: false, error: 'Missing title or value' });
 
       // Enforce maximum of 4 impacts
-      const existing = await storage.getImpacts();
-      if (existing && existing.length >= 4) {
-        return res.status(400).json({ success: false, error: 'Maximum of 4 impacts allowed' });
-      }
 
       const created = await storage.createImpact({ title: String(title), value: String(value) });
       res.status(201).json({ success: true, message: 'Impact created', data: created });
