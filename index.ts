@@ -3,9 +3,9 @@ import cookieParser from "cookie-parser";
 import { registerRoutes } from "./routes.js";
 import { config } from './config.js';
 import { backgroundScheduler } from "./services/background-scheduler.js";
+import * as imageService from './services/image-service.js';
 import cors from "cors";
-import multer from "multer";
-import fileUpload from "express-fileupload";
+import path from "path";
 
 const app = express();
 
@@ -13,9 +13,13 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
-// Enable file upload middlewares (choose one or both as needed)
-app.use(fileUpload({ limits: { fileSize: 50 * 1024 * 1024 } })); // 50MB
-app.use(multer({ limits: { fileSize: 50 * 1024 * 1024 } }).any());
+// ✅ Serve static files from public folder
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Note: multipart/form-data (file uploads) is parsed per-route by the
+// multer instance in routes.ts (uploadMulter.single('image')). A global
+// multipart parser here would consume the request stream before that
+// route-specific multer runs, causing "Unexpected end of form" errors.
 
 // Configure CORS - FIXED VERSION
 app.use(
@@ -111,6 +115,9 @@ const startServer = async (server: any, retries = 3) => {
 
 (async () => {
   try {
+    // ✅ Initialize image upload directory
+    await imageService.initializeUploadDir();
+    
     const server = await registerRoutes(app);
 
     app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

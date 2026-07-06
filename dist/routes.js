@@ -5,7 +5,6 @@ import { getAllCustomRequests } from "./database-storage.js";
 import { db } from "./db.js";
 import { insertOrderSchema, insertEnrollmentSchema, insertUserSchema, updateUserProfileSchema, validateCouponSchema, addressValidationSchema, orderPlacementSchema } from "./shared/schema.js";
 import { z } from "zod";
-// Master category data for filtering
 const allCategories = [
     {
         id: "occasion",
@@ -259,7 +258,6 @@ const allCategories = [
         ]
     }
 ];
-// Helper function to find subcategories for a main category
 const getSubcategoriesForMainCategory = (mainCategoryId) => {
     const category = allCategories.find(cat => cat.id === mainCategoryId);
     if (!category)
@@ -284,10 +282,25 @@ import Razorpay from "razorpay";
 import crypto from "crypto";
 import sgMail from '@sendgrid/mail';
 import { config } from './config.js';
+import * as imageService from './services/image-service.js';
+import multer from 'multer';
 // Simple in-memory session storage
 const sessions = new Map();
 // Simple in-memory OTP storage
 const otpStorage = new Map();
+// Configure multer for file uploads
+const uploadMulter = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        }
+        else {
+            cb(new Error('Only image files are allowed'));
+        }
+    }
+});
 // Initialize SendGrid
 sgMail.setApiKey(config.sendgrid.apiKey);
 // Initialize Razorpay client
@@ -1031,12 +1044,67 @@ export async function registerRoutes(app) {
             res.status(500).json({ message: "Failed to change password" });
         }
     });
+    // ✅ IMAGE SERVING ENDPOINT - Serve images from disk with caching
+    app.get("/api/images", async (req, res) => {
+        try {
+            const { path } = req.query;
+            if (!path || typeof path !== 'string') {
+                return res.status(400).json({ error: "Image path is required" });
+            }
+            // Get full file path
+            const fullPath = imageService.getFullFilePath(path);
+            // Check if file exists
+            const exists = await imageService.fileExists(path);
+            if (!exists) {
+                console.warn("Image not found:", path);
+                return res.status(404).json({ error: "Image not found" });
+            }
+            // Set cache headers for 1 year
+            res.set('Cache-Control', 'public, max-age=31536000, immutable');
+            res.set('Expires', new Date(Date.now() + 31536000000).toUTCString());
+            // Send file
+            res.sendFile(fullPath, (err) => {
+                if (err) {
+                    console.error("Error sending file:", err);
+                    if (!res.headersSent) {
+                        res.status(500).json({ error: "Failed to send image" });
+                    }
+                }
+            });
+        }
+        catch (error) {
+            console.error("Error serving image:", error);
+            res.status(500).json({ error: "Failed to serve image" });
+        }
+    });
+    // ✅ HELPER: Clean product for API response (use paths instead of Base64)
+    const cleanProductForApi = (product) => {
+        return {
+            ...product,
+            // Return paths if available, otherwise fallback to Base64 (for backward compatibility during migration)
+            image: product.imagePath || product.image || null,
+            imagefirst: product.imageFirstPath || product.imagefirst || null,
+            imagesecond: product.imageSecondPath || product.imagesecond || null,
+            imagethirder: product.imageThirdPath || product.imagethirder || null,
+            imagefoure: product.imageFourthPath || product.imagefoure || null,
+            imagefive: product.imageFifthPath || product.imagefive || null,
+            // Remove large Base64 strings to reduce payload
+            imagePath: undefined,
+            imageFirstPath: undefined,
+            imageSecondPath: undefined,
+            imageThirdPath: undefined,
+            imageFourthPath: undefined,
+            imageFifthPath: undefined,
+        };
+    };
     app.get("/api/products/featured", async (req, res) => {
         try {
             const products = await storage.getFeaturedProducts();
             const productsWithCategory = products.map(p => ({ ...p, category: p.main_category ?? p.category ?? p.subcategory }));
             const normalizedProducts = normalizeProductsStockStatus(productsWithCategory);
-            res.json(normalizedProducts);
+            // ✅ Clean products to use paths instead of Base64
+            const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+            res.json(cleanedProducts);
         }
         catch (error) {
             res.status(500).json({ message: "Failed to fetch featured products" });
@@ -1067,7 +1135,8 @@ export async function registerRoutes(app) {
                 console.log("Using NEW PATH: main_category + flowerTypes only");
                 const products = await storage.getProductsByMainCategoryAndFilter(main_category, flowerTypesArr);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // Prioritize main_category + subcategory + (flowerTypes or arrangements)
@@ -1076,7 +1145,8 @@ export async function registerRoutes(app) {
                 const arrangementsArr = arrangements ? arrangements.split(',').map(a => a.trim()) : [];
                 const products = await storage.getProductsByMainCategoryAndSubcategoryAndFilter(main_category, subcategory, flowerTypesArr, arrangementsArr, colors ? colors.split(',').map(c => c.trim()) : []);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // Check if we have any advanced filter parameters
@@ -1104,7 +1174,8 @@ export async function registerRoutes(app) {
                 try {
                     const products = await storage.getProductsWithFilters(filterParams);
                     const normalizedProducts = normalizeProductsStockStatus(products);
-                    res.json(normalizedProducts);
+                    const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                    res.json(cleanedProducts);
                     return;
                 }
                 catch (filterError) {
@@ -1115,21 +1186,24 @@ export async function registerRoutes(app) {
             if (main_category && subcategory) {
                 const products = await storage.getProductsByMainCategoryAndSubcategory(main_category, subcategory);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // If only main_category is provided
             if (main_category) {
                 const products = await storage.getProductsByMainCategory(main_category);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // If only subcategory is provided
             if (subcategory) {
                 const products = await storage.getProductsBySubcategory(subcategory);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // If name/search is provided
@@ -1137,13 +1211,15 @@ export async function registerRoutes(app) {
                 const searchTerm = (name || search);
                 const products = await storage.getProductsByNameSearch(searchTerm);
                 const normalizedProducts = normalizeProductsStockStatus(products);
-                res.json(normalizedProducts);
+                const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+                res.json(cleanedProducts);
                 return;
             }
             // Default: return all active products if no filters
             const products = await storage.getAllProducts();
             const normalizedProducts = normalizeProductsStockStatus(products);
-            res.json(normalizedProducts);
+            const cleanedProducts = normalizedProducts.map(cleanProductForApi);
+            res.json(cleanedProducts);
         }
         catch (error) {
             console.error('Error in products API:', error);
@@ -3855,8 +3931,6 @@ export async function registerRoutes(app) {
                     iscustom: p.iscustom || false,
                 };
                 if (!includeImages) {
-                    // Keep primary image for thumbnails but drop the rest to reduce size
-                    // Note: If you want to drop even the primary image, set base.image = undefined here
                     delete base.imagefirst;
                     delete base.imagesecond;
                     delete base.imagethirder;
@@ -3988,6 +4062,34 @@ export async function registerRoutes(app) {
                 updates.price = finalPrice;
                 updates.discountPercentage = discountPercentage;
             }
+            // AUTO-MIGRATE: convert any legacy Base64 images already stored for this product
+            // into real files on disk (same as scripts/migrate-base64-to-files.ts), so that
+            // simply opening a product in the admin and clicking Save fixes its images too —
+            // no need to run the migration script by hand on the server.
+            const IMAGE_FIELDS_TO_MIGRATE = ['image', 'imagefirst', 'imagesecond', 'imagethirder', 'imagefoure', 'imagefive'];
+            const existingProduct = await storage.getProduct(id);
+            if (existingProduct) {
+                const protocol = req.protocol || 'http';
+                const host = req.get('host') || config.server.host + ':' + config.server.port;
+                for (let index = 0; index < IMAGE_FIELDS_TO_MIGRATE.length; index++) {
+                    const field = IMAGE_FIELDS_TO_MIGRATE[index];
+                    if (updates[field] !== undefined)
+                        continue; // client is explicitly setting/clearing this field this request
+                    const currentValue = existingProduct[field];
+                    const looksLikeBase64 = typeof currentValue === 'string' &&
+                        currentValue.length > 100 &&
+                        currentValue !== 'placeholder' &&
+                        !currentValue.startsWith('http://') &&
+                        !currentValue.startsWith('https://');
+                    if (looksLikeBase64) {
+                        const savedPath = await imageService.saveBase64Image(currentValue, `prod_${id}_img${index}.jpg`);
+                        if (savedPath) {
+                            updates[field] = `${protocol}://${host}/${savedPath}`;
+                            console.log(`[AUTO-MIGRATE] product ${id} ${field} -> ${updates[field]}`);
+                        }
+                    }
+                }
+            }
             console.log(`Updating product ${id} with:`, Object.keys(updates));
             const product = await storage.updateProduct(id, updates);
             // Ensure filter is included in response as array of item values
@@ -4023,17 +4125,6 @@ export async function registerRoutes(app) {
                 }
                 return false;
             };
-            // Function to clean base64 data (if images are passed)
-            const cleanBase64 = (base64String) => {
-                if (!base64String)
-                    return null;
-                if (base64String.includes('base64,')) {
-                    return base64String.split('base64,')[1];
-                }
-                return base64String;
-            };
-            // Accept optional images array in the same create payload
-            const images = Array.isArray(req.body.images) ? req.body.images : [];
             // Normalize incoming fields and compute discount server-side
             const raw = req.body || {};
             // Parse boolean fields for iscustom and isbestseller after raw is declared
@@ -4099,11 +4190,9 @@ export async function registerRoutes(app) {
                 isbestseller: computedBestSeller,
                 colour: raw.colour || null,
                 discounts_offers: Boolean(raw.discounts_offers),
-                image: cleanBase64(images[0]) || 'placeholder',
-                imagefirst: cleanBase64(images[1]) || null,
-                imagesecond: cleanBase64(images[2]) || null,
-                imagethirder: cleanBase64(images[3]) || null,
-                imagefoure: cleanBase64(images[4]) || null
+                // Images are uploaded separately via /api/admin/products/:id/upload-images,
+                // which stores the file on disk and saves only its path/URL here.
+                image: raw.image ? (Array.isArray(raw.image) ? raw.image : String(raw.image)) : ''
             };
             // Preserve main_category / subcategory if provided by client (frontend sends these)
             if (raw.main_category !== undefined)
@@ -4155,35 +4244,91 @@ export async function registerRoutes(app) {
         }
     });
     // Enhanced upload endpoint for multiple images at once (alternative)
-    app.post("/api/admin/products/:id/upload-images", async (req, res) => {
+    app.post("/api/admin/products/:id/upload-images", uploadMulter.single('image'), async (req, res) => {
         try {
             const { id } = req.params;
-            const { images } = req.body;
-            if (!images || !Array.isArray(images)) {
-                return res.status(400).json({ error: "Images array is required" });
+            const imageIndex = parseInt(req.body?.imageIndex || "0");
+            console.log('\n========== IMAGE UPLOAD REQUEST ==========');
+            console.log(`Timestamp: ${new Date().toISOString()}`);
+            console.log(`Product ID: ${id}`);
+            console.log(`Image Index: ${imageIndex}`);
+            console.log(`Body keys:`, Object.keys(req.body || {}));
+            console.log(`Body:`, req.body);
+            console.log(`File:`, req.file ? {
+                fieldname: req.file.fieldname,
+                originalname: req.file.originalname,
+                encoding: req.file.encoding,
+                mimetype: req.file.mimetype,
+                size: `${(req.file.size / 1024).toFixed(2)} KB`,
+                buffer: `${req.file.buffer ? 'Present' : 'Missing'}`
+            } : 'NO FILE RECEIVED');
+            console.log('========================================\n');
+            // Get file from multer
+            const file = req.file;
+            if (!file) {
+                console.error('[UPLOAD ERROR] No file received');
+                return res.status(400).json({
+                    error: "Image file is required",
+                    details: "No file found in the request body. Make sure to send multipart/form-data with 'image' field",
+                    received: { body: req.body, fileKeys: Object.keys(req.files || {}) }
+                });
             }
-            const imageFields = ['image', 'imagefirst', 'imagesecond', 'imagethirder', 'imagefoure'];
+            // Validate file type
+            if (!file.mimetype.startsWith('image/')) {
+                console.error(`[UPLOAD ERROR] Invalid MIME type: ${file.mimetype}`);
+                return res.status(400).json({
+                    error: "Invalid file type",
+                    details: `Only image files are allowed. Received: ${file.mimetype}`
+                });
+            }
+            // Save file to disk
+            console.log(`[UPLOAD] Saving file: ${file.originalname} (${file.size} bytes)`);
+            const imagePath = await imageService.saveFileFromBuffer(file.buffer, file.originalname);
+            if (!imagePath) {
+                console.error('[UPLOAD ERROR] Failed to save file to disk');
+                return res.status(500).json({ error: "Failed to save image to disk" });
+            }
+            console.log(`[UPLOAD] File saved to: ${imagePath}`);
+            // Construct FULL URL for database storage
+            const protocol = req.protocol || 'http';
+            const host = req.get('host') || config.server.host + ':' + config.server.port;
+            const fullImageUrl = `${protocol}://${host}/${imagePath}`;
+            console.log(`[UPLOAD] Full URL: ${fullImageUrl}`);
+            // Map image index to database field
+            const imageFields = [
+                'image',
+                'imagefirst',
+                'imagesecond',
+                'imagethirder',
+                'imagefoure',
+                'imagefive'
+            ];
+            const fieldName = imageFields[Math.min(imageIndex, 5)];
+            console.log(`[UPLOAD] Updating field: ${fieldName}`);
+            // Update product with FULL URL
             const updates = {};
-            // Process each image
-            for (let i = 0; i < Math.min(images.length, 5); i++) {
-                const fieldName = imageFields[i];
-                const imageData = images[i];
-                // Clean base64 data
-                const cleanImage = imageData.includes('base64,')
-                    ? imageData.split('base64,')[1]
-                    : imageData;
-                updates[fieldName] = cleanImage;
-            }
+            updates[fieldName] = fullImageUrl;
             const product = await storage.updateProduct(id, updates);
+            console.log(`[UPLOAD] Product updated successfully`);
+            console.log(`[UPLOAD] New ${fieldName} value:`, product[fieldName]);
             res.json({
                 success: true,
-                message: `Uploaded ${Object.keys(updates).length} images successfully`,
+                message: `Image ${imageIndex + 1} uploaded successfully`,
+                imagePath: fullImageUrl,
+                imageUrl: fullImageUrl,
+                [`image_url${imageIndex + 1}`]: fullImageUrl,
                 product
             });
+            console.log(`[UPLOAD SUCCESS] Image ${imageIndex + 1} uploaded for product ${id}`);
         }
         catch (error) {
-            console.error("Error uploading images:", error);
-            res.status(500).json({ error: "Failed to upload images" });
+            console.error("\n[UPLOAD FATAL ERROR]", error);
+            console.error("Stack:", error instanceof Error ? error.stack : 'No stack trace');
+            res.status(500).json({
+                error: "Failed to upload image",
+                details: error instanceof Error ? error.message : String(error),
+                timestamp: new Date().toISOString()
+            });
         }
     });
     app.delete("/api/admin/products/:id", async (req, res) => {
@@ -5452,11 +5597,14 @@ export async function registerRoutes(app) {
             });
         }
     });
+    console.log("Fetching impacts...");
     // Impacts endpoints (key/value)
     app.get('/api/impacts', async (req, res) => {
         try {
+            console.log('GET /api/impacts called');
             const impacts = await storage.getImpacts();
-            res.json(impacts);
+            console.log('Impacts result:', impacts);
+            res.json({ success: true, data: impacts, count: Array.isArray(impacts) ? impacts.length : 0 });
         }
         catch (error) {
             console.error('Error fetching impacts:', error);
@@ -5465,19 +5613,11 @@ export async function registerRoutes(app) {
     });
     app.post('/api/impacts', async (req, res) => {
         try {
-            // const user = await getUserFromSession(req);
-            // if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-            // const isAdmin = config.admin.emails.includes(user.email) || user.userType === 'admin';
-            // if (!isAdmin) return res.status(403).json({ success: false, error: 'Forbidden - Admin only' });
             const { title, value } = req.body;
             // Validate input
             if (!title || value === undefined)
                 return res.status(400).json({ success: false, error: 'Missing title or value' });
             // Enforce maximum of 4 impacts
-            const existing = await storage.getImpacts();
-            if (existing && existing.length >= 4) {
-                return res.status(400).json({ success: false, error: 'Maximum of 4 impacts allowed' });
-            }
             const created = await storage.createImpact({ title: String(title), value: String(value) });
             res.status(201).json({ success: true, message: 'Impact created', data: created });
         }
@@ -5506,10 +5646,6 @@ export async function registerRoutes(app) {
     });
     app.delete('/api/impacts/:id', async (req, res) => {
         try {
-            // const user = await getUserFromSession(req);
-            // if (!user) return res.status(401).json({ success: false, error: 'Unauthorized' });
-            // const isAdmin = config.admin.emails.includes(user.email) || user.userType === 'admin';
-            // if (!isAdmin) return res.status(403).json({ success: false, error: 'Forbidden - Admin only' });
             const { id } = req.params;
             await storage.deleteImpact(id);
             res.json({ success: true, message: 'Impact deleted' });

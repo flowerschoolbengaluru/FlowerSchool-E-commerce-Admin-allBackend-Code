@@ -29,7 +29,15 @@ export const products = pgTable("products", {
     discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }), // Actual discount amount in currency
     category: text("category").notNull(),
     subcategory: text("subcategory"), // Subcategory field for products
-    image: text("image").notNull(),
+    // Image paths instead of Base64 - stores file paths only
+    imagePath: varchar("image_path"),
+    imageFirstPath: varchar("image_first_path"),
+    imageSecondPath: varchar("image_second_path"),
+    imageThirdPath: varchar("image_third_path"),
+    imageFourthPath: varchar("image_fourth_path"),
+    imageFifthPath: varchar("image_fifth_path"),
+    // Keep old Base64 columns for backward compatibility during migration
+    image: text("image"),
     imagefirst: text("imagefirst"),
     imagesecond: text("imagesecond"),
     imagethirder: text("imagethirder"),

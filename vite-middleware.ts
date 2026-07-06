@@ -51,7 +51,8 @@ export async function setupVite(app: Express, server: Server) {
     allowedHosts: true as const,
   };
 
-  const viteModule = await import('node_modules/vite');
+  // const viteModule = await import('node_modules/vite');
+  const viteModule = await import('vite');
   const viteServer = await viteModule.createServer({
     ...viteConfig,
     configFile: false,

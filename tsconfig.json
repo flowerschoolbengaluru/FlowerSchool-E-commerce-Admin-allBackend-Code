@@ -14,6 +14,7 @@
     "baseUrl": ".",
     "allowJs": true,
     "noEmitOnError": false,
+
     "paths": {
       "@shared/*": ["./shared/*"]
     }
@@ -23,5 +24,9 @@
     "routes.ts",
     "**/*.ts"
   ],
-  "exclude": ["node_modules", "dist", "vite-setup.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "vite-setup.ts"
+  ]
 }

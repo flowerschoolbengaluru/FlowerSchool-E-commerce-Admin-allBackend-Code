@@ -1469,6 +1469,37 @@ ORDER BY B.createdat DESC; `;
                 valueCount++;
             }
             // NOTE: subcategory handled above (explicit subcategory or legacy category mapping)
+            // Handle image path fields (new file-based storage)
+            if (updates.imagePath !== undefined) {
+                updateFields.push(`image_path = $${valueCount}`);
+                values.push(updates.imagePath);
+                valueCount++;
+            }
+            if (updates.imageFirstPath !== undefined) {
+                updateFields.push(`image_first_path = $${valueCount}`);
+                values.push(updates.imageFirstPath);
+                valueCount++;
+            }
+            if (updates.imageSecondPath !== undefined) {
+                updateFields.push(`image_second_path = $${valueCount}`);
+                values.push(updates.imageSecondPath);
+                valueCount++;
+            }
+            if (updates.imageThirdPath !== undefined) {
+                updateFields.push(`image_third_path = $${valueCount}`);
+                values.push(updates.imageThirdPath);
+                valueCount++;
+            }
+            if (updates.imageFourthPath !== undefined) {
+                updateFields.push(`image_fourth_path = $${valueCount}`);
+                values.push(updates.imageFourthPath);
+                valueCount++;
+            }
+            if (updates.imageFifthPath !== undefined) {
+                updateFields.push(`image_fifth_path = $${valueCount}`);
+                values.push(updates.imageFifthPath);
+                valueCount++;
+            }
             // Handle image fields
             if (updates.image !== undefined) {
                 updateFields.push(`image = $${valueCount}`);
@@ -1591,12 +1622,25 @@ ORDER BY B.createdat DESC; `;
                 : (productData.discount_amount !== undefined && productData.discount_amount !== null)
                     ? Number(productData.discount_amount)
                     : 0;
+            // Handle image field - accept array or string
+            let imageValue = null;
+            if (productData.image) {
+                if (Array.isArray(productData.image)) {
+                    imageValue = JSON.stringify(productData.image);
+                }
+                else {
+                    imageValue = String(productData.image);
+                }
+            }
+            else {
+                imageValue = JSON.stringify([]); // Default to empty array if no image provided
+            }
             try {
                 const query = {
                     text: `
           INSERT INTO bouquetbar.products (
             name, description, price, originalprice, discount_percentage, discount_amount, main_category, subcategory, stockquantity,
-            "inStock", featured, iscustom, isbestseller, colour, discounts_offers, image, filter,
+            "inStock", featured, iscustom, isbestseller, colour, discounts_offers, filter, image,
             createdat
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
@@ -1618,8 +1662,8 @@ ORDER BY B.createdat DESC; `;
                         productData.isbestseller || false,
                         productData.colour || null,
                         productData.discounts_offers ? true : false,
-                        productData.image || null,
-                        Array.isArray(productData.filter) ? JSON.stringify(productData.filter) : (productData.filter || null)
+                        Array.isArray(productData.filter) ? JSON.stringify(productData.filter) : (productData.filter || null),
+                        imageValue
                     ]
                 };
                 console.log('Executing product insert (with discounts) values:', query.values);
@@ -1632,7 +1676,7 @@ ORDER BY B.createdat DESC; `;
                     text: `
           INSERT INTO bouquetbar.products (
             name, description, price, main_category, subcategory, stockquantity,
-            "inStock", featured, iscustom, isbestseller, colour, discounts_offers, image, filter,
+            "inStock", featured, iscustom, isbestseller, colour, discounts_offers, filter, image,
             createdat
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
@@ -1651,8 +1695,8 @@ ORDER BY B.createdat DESC; `;
                         productData.isbestseller || false,
                         productData.colour || null,
                         Boolean(productData.discounts_offers),
-                        productData.image || null,
-                        Array.isArray(productData.filter) ? JSON.stringify(productData.filter) : (productData.filter || null)
+                        Array.isArray(productData.filter) ? JSON.stringify(productData.filter) : (productData.filter || null),
+                        imageValue
                     ]
                 };
                 console.log('Executing basic product insert values:', basicQuery.values);
