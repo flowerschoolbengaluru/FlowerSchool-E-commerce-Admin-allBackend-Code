@@ -300,9 +300,8 @@ export class DatabaseStorage {
       WHERE isactive = true
       ORDER BY createdat DESC;
       `;
-            console.log('Executing query:', query);
             const result = await db.query(query);
-            console.log('Query Result:', result.rows);
+            console.log(`getAllProducts: fetched ${result.rows.length} rows`);
             return result.rows;
         }
         catch (error) {
