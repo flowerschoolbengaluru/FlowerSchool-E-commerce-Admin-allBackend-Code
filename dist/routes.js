@@ -1077,17 +1077,28 @@ export async function registerRoutes(app) {
             res.status(500).json({ error: "Failed to serve image" });
         }
     });
+    // ✅ HELPER: image-service saves files as a bare relative path ("products/xyz.jpg").
+    // That resolves incorrectly in <img src> (relative to the current page, not the site root),
+    // so root-anchor it here. Full URLs and legacy Base64 strings are left untouched.
+    const normalizeImageUrl = (value) => {
+        if (!value || typeof value !== 'string')
+            return null;
+        if (value.startsWith('products/')) {
+            return `/${value}`;
+        }
+        return value;
+    };
     // ✅ HELPER: Clean product for API response (use paths instead of Base64)
     const cleanProductForApi = (product) => {
         return {
             ...product,
             // Return paths if available, otherwise fallback to Base64 (for backward compatibility during migration)
-            image: product.imagePath || product.image || null,
-            imagefirst: product.imageFirstPath || product.imagefirst || null,
-            imagesecond: product.imageSecondPath || product.imagesecond || null,
-            imagethirder: product.imageThirdPath || product.imagethirder || null,
-            imagefoure: product.imageFourthPath || product.imagefoure || null,
-            imagefive: product.imageFifthPath || product.imagefive || null,
+            image: normalizeImageUrl(product.imagePath) || normalizeImageUrl(product.image) || null,
+            imagefirst: normalizeImageUrl(product.imageFirstPath) || normalizeImageUrl(product.imagefirst) || null,
+            imagesecond: normalizeImageUrl(product.imageSecondPath) || normalizeImageUrl(product.imagesecond) || null,
+            imagethirder: normalizeImageUrl(product.imageThirdPath) || normalizeImageUrl(product.imagethirder) || null,
+            imagefoure: normalizeImageUrl(product.imageFourthPath) || normalizeImageUrl(product.imagefoure) || null,
+            imagefive: normalizeImageUrl(product.imageFifthPath) || normalizeImageUrl(product.imagefive) || null,
             // Remove large Base64 strings to reduce payload
             imagePath: undefined,
             imageFirstPath: undefined,
@@ -4099,7 +4110,7 @@ export async function registerRoutes(app) {
             res.json({
                 success: true,
                 message: "Product updated successfully",
-                product
+                product: product ? cleanProductForApi(product) : product
             });
         }
         catch (error) {
