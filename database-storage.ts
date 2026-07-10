@@ -362,6 +362,7 @@ return result.rows[0];
 
   // Product Methods
   async getAllProducts(): Promise < Product[] > {
+  console.time("getAllProducts Total");
   try {
     const query = `
       SELECT *
@@ -369,12 +370,16 @@ return result.rows[0];
       WHERE isactive = true
       ORDER BY createdat DESC;
       `;
+    console.time("getAllProducts DB");
     const result = await db.query(query);
+    console.timeEnd("getAllProducts DB");
     console.log(`getAllProducts: fetched ${result.rows.length} rows`);
     return result.rows;
   } catch(error) {
     console.error('Error in getAllProducts:', error);
     throw new Error(`Failed to get products: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } finally {
+    console.timeEnd("getAllProducts Total");
   }
 }
 
