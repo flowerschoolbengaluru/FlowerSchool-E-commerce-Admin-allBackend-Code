@@ -4900,6 +4900,22 @@ app.get("/api/admin/orders", async (req, res) => {
     try {
       console.log("Received class creation request");
 
+      // Save Base64 image to disk and store the URL instead, same as products.
+      let classImage = req.body.image;
+      const looksLikeBase64 =
+        typeof classImage === 'string' &&
+        classImage.length > 100 &&
+        !classImage.startsWith('http://') &&
+        !classImage.startsWith('https://');
+      if (looksLikeBase64) {
+        const savedPath = await imageService.saveBase64Image(classImage, `class_${Date.now()}.jpg`);
+        if (savedPath) {
+          const protocol = req.protocol || 'http';
+          const host = req.get('host') || config.server.host + ':' + config.server.port;
+          classImage = `${protocol}://${host}/${savedPath}`;
+        }
+      }
+
       const classData = {
         title: req.body.title,
         description: req.body.description,
@@ -4909,7 +4925,7 @@ app.get("/api/admin/orders", async (req, res) => {
         features: JSON.stringify(req.body.features),
         popular: false,
         nextbatch: req.body.nextbatch,
-        image: req.body.image,
+        image: classImage,
         category: req.body.category
       };
 
@@ -4946,6 +4962,22 @@ app.get("/api/admin/orders", async (req, res) => {
         });
       }
 
+      // Save Base64 image to disk and store the URL instead, same as products.
+      let classImage = req.body.image;
+      const looksLikeBase64 =
+        typeof classImage === 'string' &&
+        classImage.length > 100 &&
+        !classImage.startsWith('http://') &&
+        !classImage.startsWith('https://');
+      if (looksLikeBase64) {
+        const savedPath = await imageService.saveBase64Image(classImage, `class_${classId}_${Date.now()}.jpg`);
+        if (savedPath) {
+          const protocol = req.protocol || 'http';
+          const host = req.get('host') || config.server.host + ':' + config.server.port;
+          classImage = `${protocol}://${host}/${savedPath}`;
+        }
+      }
+
       const updateData = {
         title: req.body.title,
         description: req.body.description,
@@ -4954,7 +4986,7 @@ app.get("/api/admin/orders", async (req, res) => {
         sessions: req.body.sessions ? parseInt(req.body.sessions) : undefined,
         features: req.body.features ? JSON.stringify(req.body.features) : undefined,
         nextbatch: req.body.nextbatch,
-        image: req.body.image,
+        image: classImage,
         category: req.body.category
       };
 

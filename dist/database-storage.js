@@ -2557,18 +2557,18 @@ ORDER BY B.createdat DESC; `;
         const query = `
     SELECT *
     FROM bouquetbar.order_status_history
-    WHERE order_id = '${orderId}'
-    ORDER BY changedat;
+    WHERE order_id = $1
+    ORDER BY changed_at;
   `;
-        const result = await db.query(query);
+        const result = await db.query(query, [orderId]);
         return result.rows;
     }
     async addOrderStatusHistory(orderId, status, note) {
         const query = `
     INSERT INTO bouquetbar.order_status_history (order_id, status, note, changed_at)
-    VALUES ('${orderId}', '${status}', ${note ? `'${note}'` : 'NULL'}, NOW());
+    VALUES ($1, $2, $3, NOW());
   `;
-        await db.query(query);
+        await db.query(query, [orderId, status, note ?? null]);
     }
     async validateStockAvailability(items) {
         const errors = [];
