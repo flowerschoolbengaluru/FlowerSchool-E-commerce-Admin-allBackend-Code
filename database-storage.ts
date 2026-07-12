@@ -2105,21 +2105,21 @@ async getAllOrders(date?: string): Promise<Order[]> {
     SELECT *
     FROM bouquetbar.orders
   `;
+  const params: string[] = [];
 
   if (date) {
     query += `
-      WHERE createdat >= '${date} 00:00:00'
-      AND createdat <= '${date} 23:59:59'
+      WHERE createdat >= $1
+      AND createdat <= $2
     `;
+    params.push(`${date} 00:00:00`, `${date} 23:59:59`);
   }
 
   query += `
     ORDER BY createdat DESC;
   `;
 
-  console.log("Executing Query:", query);
-
-  const result = await db.query(query);
+  const result = await db.query(query, params);
   return result.rows;
 }
 
@@ -3246,10 +3246,10 @@ return {
 const queryDelivery = `
       SELECT *
       FROM bouquetbar.delivery_options
-      WHERE id = '${orderData.deliveryOptionId}'
+      WHERE id = $1
       LIMIT 1;
     `;
-const deliveryResult = await db.query(queryDelivery);
+const deliveryResult = await db.query(queryDelivery, [orderData.deliveryOptionId]);
 const deliveryOption = deliveryResult.rows[0];
 if (!deliveryOption) {
   errors.push("Invalid delivery option");
@@ -3260,12 +3260,12 @@ if (orderData.userId && orderData.shippingAddressId) {
   const queryAddress = `
         SELECT *
         FROM bouquetbar.addresses
-        WHERE id = '${orderData.shippingAddressId}' 
-          AND userid = '${orderData.userId}'
+        WHERE id = $1
+          AND userid = $2
                   AND isactive=true
         LIMIT 1;
       `;
-  const addressResult = await db.query(queryAddress);
+  const addressResult = await db.query(queryAddress, [orderData.shippingAddressId, orderData.userId]);
   const address = addressResult.rows[0];
   if (!address) {
     errors.push("Invalid shipping address");
@@ -3324,13 +3324,33 @@ const validatedOrder: InsertOrder = {
   total: calculatedPricing.total.toString(),
   shippingAddressId: orderData.shippingAddressId,
   deliveryAddress: orderData.deliveryAddress,
-  deliveryDate: orderData.deliveryDate ? (() => {
-    const date = new Date(orderData.deliveryDate);
-    return isNaN(date.getTime()) ? undefined : date;
-  })() : undefined,
+  deliveryDate: (() => {
+    if (orderData.deliveryDate) {
+      const date = new Date(orderData.deliveryDate);
+      if (!isNaN(date.getTime())) return date;
+    }
+    // Date-specific delivery options (e.g. "Select Future Date" -> "Future Date
+    // Delivery (2026-07-27)", or admin-configured "Feature date - 27-07-2026")
+    // only carry the date inside their label, not a separate structured field.
+    // Fall back to parsing it out of the label so it still lands in deliverydate.
+    const label = orderData.delivery_option || '';
+    const isoMatch = label.match(/(\d{4})-(\d{2})-(\d{2})/); // YYYY-MM-DD (HTML date input)
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+    const ddmmMatch = label.match(/(\d{2})-(\d{2})-(\d{4})/); // DD-MM-YYYY
+    if (ddmmMatch) {
+      const [, day, month, year] = ddmmMatch;
+      const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+    return undefined;
+  })(),
   estimatedDeliveryDate: deliveryOption
     ? (() => {
-      const daysString = deliveryOption.estimateddays.split('-')[0];
+      const daysString = deliveryOption.estimateddays ? String(deliveryOption.estimateddays).split('-')[0] : '';
       const days = parseInt(daysString);
       if (isNaN(days) || days < 0) {
         return new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Default to 3 days
@@ -3361,9 +3381,10 @@ return {
     // 2️⃣ Validate userId if provided
     let validUserId: string | null = null, username: string | null = null;
     if(userId) {
-      const userCheck = await db.query(`
-        SELECT id, firstname FROM bouquetbar.users WHERE id = '${userId}';
-      `);
+      const userCheck = await db.query(
+        `SELECT id, firstname FROM bouquetbar.users WHERE id = $1;`,
+        [userId]
+      );
       if (!userCheck.rows.length) {
         throw new Error(`User with ID ${userId} does not exist.`);
       }

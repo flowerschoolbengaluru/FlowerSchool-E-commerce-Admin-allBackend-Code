@@ -2606,7 +2606,9 @@ export async function registerRoutes(app) {
                 return res.status(400).json({
                     success: false,
                     message: "Order creation failed",
-                    errors: ["Order could not be created. Please check your input and try again."]
+                    errors: orderProcessingResult.errors && orderProcessingResult.errors.length > 0
+                        ? orderProcessingResult.errors
+                        : ["Order could not be created. Please check your input and try again."]
                 });
             }
             console.log("[ORDER PLACEMENT] Created order details:", JSON.stringify(createdOrder));
