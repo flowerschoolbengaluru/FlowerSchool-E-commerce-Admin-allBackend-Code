@@ -6,6 +6,7 @@ import { backgroundScheduler } from "./services/background-scheduler.js";
 import * as imageService from './services/image-service.js';
 import cors from "cors";
 import path from "path";
+import fs from "fs";
 
 const app = express();
 
@@ -119,6 +120,20 @@ const startServer = async (server: any, retries = 3) => {
     await imageService.initializeUploadDir();
     
     const server = await registerRoutes(app);
+
+    // SPA fallback: any non-API GET that didn't match a static file or API
+    // route (e.g. /products on a hard navigation/refresh) gets index.html,
+    // so client-side routing can take over instead of a 404.
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== "GET" || req.path.startsWith("/api")) {
+        return next();
+      }
+      const indexPath = path.join(process.cwd(), "public", "index.html");
+      if (!fs.existsSync(indexPath)) {
+        return next();
+      }
+      res.sendFile(indexPath);
+    });
 
     app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       const status = err.status || err.statusCode || 500;

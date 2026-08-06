@@ -6,6 +6,7 @@ import { backgroundScheduler } from "./services/background-scheduler.js";
 import * as imageService from './services/image-service.js';
 import cors from "cors";
 import path from "path";
+import fs from "fs";
 const app = express();
 // Increase body size limits for JSON and URL-encoded payloads
 app.use(express.json({ limit: '50mb' }));
@@ -99,6 +100,19 @@ const startServer = async (server, retries = 3) => {
         // ✅ Initialize image upload directory
         await imageService.initializeUploadDir();
         const server = await registerRoutes(app);
+        // SPA fallback: any non-API GET that didn't match a static file or API
+        // route (e.g. /products on a hard navigation/refresh) gets index.html,
+        // so client-side routing can take over instead of a 404.
+        app.use((req, res, next) => {
+            if (req.method !== "GET" || req.path.startsWith("/api")) {
+                return next();
+            }
+            const indexPath = path.join(process.cwd(), "public", "index.html");
+            if (!fs.existsSync(indexPath)) {
+                return next();
+            }
+            res.sendFile(indexPath);
+        });
         app.use((err, _req, res, _next) => {
             const status = err.status || err.statusCode || 500;
             const message = err.message || "Internal Server Error";
