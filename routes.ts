@@ -1286,6 +1286,23 @@ app.get("/api/products", async (req, res) => {
       arrangements
     });
 
+    const toArray = (v: unknown): string[] =>
+  v === undefined ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+
+const mins = toArray(minPrice);
+const maxs = toArray(maxPrice);
+
+const priceRanges = mins.map((min, i) => ({
+  min: min === "" ? 0 : parseFloat(min),
+  max: maxs[i] === undefined || maxs[i] === "" ? Infinity : parseFloat(maxs[i]),
+}));
+
+const inPriceRange = (p: any) => {
+  if (priceRanges.length === 0) return true;
+  const price = Number(p.price);
+  return priceRanges.some((r) => price >= r.min && price <= r.max);
+};
+
     // ✅ NEW CONDITION for main_category + flowerTypes only
     if (main_category && flowerTypes && !subcategory && !arrangements) {
       const flowerTypesArr = (flowerTypes as string)
@@ -1341,8 +1358,8 @@ app.get("/api/products", async (req, res) => {
         inStock: inStock !== undefined ? inStock === 'true' : undefined,
         featured: featured !== undefined ? featured === 'true' : undefined,
         bestSeller: bestSeller !== undefined ? bestSeller === 'true' : undefined,
-        minPrice: minPrice ? parseFloat(minPrice as string) : undefined,
-        maxPrice: maxPrice ? parseFloat(maxPrice as string) : undefined,
+        minPrice: undefined,
+        maxPrice: undefined,
         colors: colors ? (colors as string).split(',').map(c => c.trim()) : [],
         flowerTypes: flowerTypes ? (flowerTypes as string).split(',').map(f => f.trim()) : [],
         arrangements: arrangements ? (arrangements as string).split(',').map(a => a.trim()) : []
@@ -1352,7 +1369,7 @@ app.get("/api/products", async (req, res) => {
 
       try {
         const products = await storage.getProductsWithFilters(filterParams);
-        const normalizedProducts = normalizeProductsStockStatus(products);
+       const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
         const cleanedProducts = normalizedProducts.map(cleanProductForApi);
         res.json(cleanedProducts);
         return;
@@ -1364,7 +1381,7 @@ app.get("/api/products", async (req, res) => {
     // If both main_category and subcategory are provided
     if (main_category && subcategory) {
       const products = await storage.getProductsByMainCategoryAndSubcategory(main_category as string, subcategory as string);
-      const normalizedProducts = normalizeProductsStockStatus(products);
+   const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
       const cleanedProducts = normalizedProducts.map(cleanProductForApi);
       res.json(cleanedProducts);
       return;
@@ -1373,7 +1390,7 @@ app.get("/api/products", async (req, res) => {
     // If only main_category is provided
     if (main_category) {
       const products = await storage.getProductsByMainCategory(main_category as string);
-      const normalizedProducts = normalizeProductsStockStatus(products);
+          const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
       const cleanedProducts = normalizedProducts.map(cleanProductForApi);
       res.json(cleanedProducts);
       return;
@@ -1382,7 +1399,7 @@ app.get("/api/products", async (req, res) => {
     // If only subcategory is provided
     if (subcategory) {
       const products = await storage.getProductsBySubcategory(subcategory as string);
-      const normalizedProducts = normalizeProductsStockStatus(products);
+      const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
       const cleanedProducts = normalizedProducts.map(cleanProductForApi);
       res.json(cleanedProducts);
       return;
@@ -1392,7 +1409,7 @@ app.get("/api/products", async (req, res) => {
     if (name || search) {
       const searchTerm = (name || search) as string;
       const products = await storage.getProductsByNameSearch(searchTerm);
-      const normalizedProducts = normalizeProductsStockStatus(products);
+      const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
       const cleanedProducts = normalizedProducts.map(cleanProductForApi);
       res.json(cleanedProducts);
       return;
@@ -1400,7 +1417,7 @@ app.get("/api/products", async (req, res) => {
     
     // Default: return all active products if no filters
     const products = await storage.getAllProducts();
-    const normalizedProducts = normalizeProductsStockStatus(products);
+    const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
     const cleanedProducts = normalizedProducts.map(cleanProductForApi);
     res.json(cleanedProducts);
     

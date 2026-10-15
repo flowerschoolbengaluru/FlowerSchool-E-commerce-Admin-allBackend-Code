@@ -1138,6 +1138,19 @@ export async function registerRoutes(app) {
                 flowerTypes,
                 arrangements
             });
+            const toArray = (v) => v === undefined ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+            const mins = toArray(minPrice);
+            const maxs = toArray(maxPrice);
+            const priceRanges = mins.map((min, i) => ({
+                min: min === "" ? 0 : parseFloat(min),
+                max: maxs[i] === undefined || maxs[i] === "" ? Infinity : parseFloat(maxs[i]),
+            }));
+            const inPriceRange = (p) => {
+                if (priceRanges.length === 0)
+                    return true;
+                const price = Number(p.price);
+                return priceRanges.some((r) => price >= r.min && price <= r.max);
+            };
             // ✅ NEW CONDITION for main_category + flowerTypes only
             if (main_category && flowerTypes && !subcategory && !arrangements) {
                 const flowerTypesArr = flowerTypes
@@ -1175,8 +1188,8 @@ export async function registerRoutes(app) {
                     inStock: inStock !== undefined ? inStock === 'true' : undefined,
                     featured: featured !== undefined ? featured === 'true' : undefined,
                     bestSeller: bestSeller !== undefined ? bestSeller === 'true' : undefined,
-                    minPrice: minPrice ? parseFloat(minPrice) : undefined,
-                    maxPrice: maxPrice ? parseFloat(maxPrice) : undefined,
+                    minPrice: undefined,
+                    maxPrice: undefined,
                     colors: colors ? colors.split(',').map(c => c.trim()) : [],
                     flowerTypes: flowerTypes ? flowerTypes.split(',').map(f => f.trim()) : [],
                     arrangements: arrangements ? arrangements.split(',').map(a => a.trim()) : []
@@ -1184,7 +1197,7 @@ export async function registerRoutes(app) {
                 console.log('Filter params being passed to getProductsWithFilters:', filterParams);
                 try {
                     const products = await storage.getProductsWithFilters(filterParams);
-                    const normalizedProducts = normalizeProductsStockStatus(products);
+                    const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
                     const cleanedProducts = normalizedProducts.map(cleanProductForApi);
                     res.json(cleanedProducts);
                     return;
@@ -1196,7 +1209,7 @@ export async function registerRoutes(app) {
             // If both main_category and subcategory are provided
             if (main_category && subcategory) {
                 const products = await storage.getProductsByMainCategoryAndSubcategory(main_category, subcategory);
-                const normalizedProducts = normalizeProductsStockStatus(products);
+                const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
                 const cleanedProducts = normalizedProducts.map(cleanProductForApi);
                 res.json(cleanedProducts);
                 return;
@@ -1204,7 +1217,7 @@ export async function registerRoutes(app) {
             // If only main_category is provided
             if (main_category) {
                 const products = await storage.getProductsByMainCategory(main_category);
-                const normalizedProducts = normalizeProductsStockStatus(products);
+                const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
                 const cleanedProducts = normalizedProducts.map(cleanProductForApi);
                 res.json(cleanedProducts);
                 return;
@@ -1212,7 +1225,7 @@ export async function registerRoutes(app) {
             // If only subcategory is provided
             if (subcategory) {
                 const products = await storage.getProductsBySubcategory(subcategory);
-                const normalizedProducts = normalizeProductsStockStatus(products);
+                const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
                 const cleanedProducts = normalizedProducts.map(cleanProductForApi);
                 res.json(cleanedProducts);
                 return;
@@ -1221,14 +1234,14 @@ export async function registerRoutes(app) {
             if (name || search) {
                 const searchTerm = (name || search);
                 const products = await storage.getProductsByNameSearch(searchTerm);
-                const normalizedProducts = normalizeProductsStockStatus(products);
+                const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
                 const cleanedProducts = normalizedProducts.map(cleanProductForApi);
                 res.json(cleanedProducts);
                 return;
             }
             // Default: return all active products if no filters
             const products = await storage.getAllProducts();
-            const normalizedProducts = normalizeProductsStockStatus(products);
+            const normalizedProducts = normalizeProductsStockStatus(products.filter(inPriceRange));
             const cleanedProducts = normalizedProducts.map(cleanProductForApi);
             res.json(cleanedProducts);
         }
