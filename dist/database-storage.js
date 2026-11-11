@@ -1792,7 +1792,8 @@ ORDER BY B.createdat DESC; `;
         const query = `
     SELECT *
     FROM bouquetbar.courses
-    WHERE isactive = true;
+    WHERE isactive = true
+    ORDER BY display_order ASC, created_at ASC;
   `;
         console.log('Executing query:', query);
         const result = await db.query(query);
@@ -1803,12 +1804,12 @@ ORDER BY B.createdat DESC; `;
         const query = `
     SELECT *
     FROM bouquetbar.courses
-    WHERE id = '${id}'
+    WHERE id = $1
     AND isactive = true
     LIMIT 1;
   `;
         console.log('Executing query:', query);
-        const result = await db.query(query);
+        const result = await db.query(query, [id]);
         return result.rows[0] || undefined;
     }
     async createCourse(course) {
